@@ -1,18 +1,19 @@
 import { loadConfig } from './config.js';
 import { createDb } from './db.js';
 import { createChain } from './chain/client.js';
+import { webhookProducer } from './worker/queue.js';
 import { buildServer, type DeliveryStore } from './server.js';
 
 const cfg = loadConfig();
 const db = createDb(cfg.DATABASE_URL);
 
-// Real queue wiring (BullMQ) is a follow-up: deliveries are recorded, and jobs are only logged for now.
+const producer = webhookProducer(cfg.REDIS_URL);
 const store: DeliveryStore = {
   insert: async (id, event) => {
     try { await db.webhookDelivery.create({ data: { id, event } }); return true; }
     catch (e) { if ((e as { code?: string }).code === 'P2002') return false; throw e; }
   },
-  enqueue: async (id, event) => { console.log(JSON.stringify({ msg: 'webhook queued (no consumer yet)', id, event })); },
+  enqueue: (id, event, payload) => producer.enqueue(id, event, payload),
 };
 
 const chain = createChain({ rpcUrl: cfg.STELLAR_RPC_URL, networkPassphrase: cfg.STELLAR_NETWORK_PASSPHRASE, contractId: cfg.BOUNTY_CONTRACT_ID });
