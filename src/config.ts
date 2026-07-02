@@ -15,6 +15,14 @@ const schema = z.object({
   SESSION_SECRET: z.string().min(32),
   CSRF_SECRET: z.string().min(32),
   GITHUB_WEBHOOK_SECRET: z.string().min(8),
+  RELAYER_SECRET: z.string().regex(/^S[A-Z2-7]{55}$/).optional(),
+  RELAYER_MIN_XLM_ALERT: z.coerce.number().default(50),
+  ALERT_WEBHOOK_URL: z.string().url().optional(),
+  TOKEN_USDC_CONTRACT_ID: z.string().default(''),
+  TOKEN_XLM_CONTRACT_ID: z.string().default(''),
+}).refine((c) => !(c.STELLAR_NETWORK === 'mainnet' && c.RELAYER_SECRET), {
+  message: 'RELAYER_SECRET must not be used on mainnet; use a KMS-backed signer',
+  path: ['RELAYER_SECRET'],
 });
 
 export type Config = z.infer<typeof schema>;
