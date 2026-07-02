@@ -3,6 +3,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { contractErrorName } from '../chain/errors.js';
 import type { Db } from '../db.js';
+import { mutationLimit } from './limits.js';
 
 export interface AdminChain {
   buildOpenDisputeTx(arbiter: string, bountyId: bigint): Promise<string>;
@@ -18,7 +19,7 @@ const HOURS = 36;
 export function registerAdmin(app: FastifyInstance, d: AdminDeps, authed: (mutating: boolean) => object) {
   const now = () => (d.now ?? (() => new Date()))();
   /** Admin rights are checked server-side on every route; the flag follows config, not the client. */
-  const adminOnly = (mutating: boolean) => authed(mutating);
+  const adminOnly = (mutating: boolean) => (mutating ? { ...authed(mutating), ...mutationLimit(30) } : authed(mutating));
   const guard = async (req: FastifyRequest, reply: FastifyReply) => ((req as Authed).user?.isAdmin ? true : (void err(reply, 403, 'forbidden', 'admins only'), false));
   const audit = (req: FastifyRequest, action: string, target: string, data: object) =>
     d.db.auditLog.create({ data: { actor: `admin:${(req as Authed).user!.githubId}`, action, target, data } });

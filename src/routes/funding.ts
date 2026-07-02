@@ -3,6 +3,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { contractErrorName } from '../chain/errors.js';
 import type { Db } from '../db.js';
+import { mutationLimit } from './limits.js';
 
 /** What the funding routes need from the chain; the real one is createChain(). */
 export interface FundingChain {
@@ -31,7 +32,7 @@ function chainError(r: FastifyReply, e: unknown) {
 
 export function registerFunding(app: FastifyInstance, d: FundingDeps, authed: (mutating: boolean) => object) {
   const now = () => (d.now ?? (() => new Date()))();
-  const limit = { config: { rateLimit: { max: 20, timeWindow: '1 minute' } } };
+  const limit = mutationLimit(20);
 
   const state = (i: { expiresAt: Date; usedAt: Date | null }) => (i.usedAt ? 'used' : i.expiresAt <= now() ? 'expired' : 'open');
 

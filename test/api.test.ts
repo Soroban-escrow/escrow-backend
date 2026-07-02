@@ -133,3 +133,19 @@ describe('public reads', () => {
     expect((await a.inject('/users/nobody')).statusCode).toBe(404);
   });
 });
+
+describe('per-user rate limits', () => {
+  it('limits one user without affecting another', async () => {
+    const a = await app();
+    const one = await login('rl1', 11n);
+    const two = await login('rl2', 12n);
+    const h1 = { cookie: one.cookie, 'x-csrf-token': await csrf(a, one.cookie) };
+    const h2 = { cookie: two.cookie, 'x-csrf-token': await csrf(a, two.cookie) };
+    const hit = (h: object) => a.inject({ method: 'POST', url: '/wallet/challenge', headers: h as Record<string, string>, payload: { address: 'nope' } });
+    const codes: number[] = [];
+    for (let i = 0; i < 22; i++) codes.push((await hit(h1)).statusCode);
+    expect(codes.slice(0, 20).every((c) => c === 400)).toBe(true);
+    expect(codes.slice(20)).toEqual([429, 429]);
+    expect((await hit(h2)).statusCode).toBe(400); // same IP, different user: not limited
+  });
+});

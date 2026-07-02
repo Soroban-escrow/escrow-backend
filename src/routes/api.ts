@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { createChallenge, unlinkWallet, verifyChallenge, WalletError } from '../auth/wallet.js';
 import { COOKIE, csrfToken, csrfValid, destroySession, getSessionUser } from '../auth/session.js';
 import type { Db } from '../db.js';
+import { mutationLimit as limit } from './limits.js';
 import { registerAdmin, type AdminChain } from './admin.js';
 import { registerFunding, type FundingChain } from './funding.js';
 
@@ -36,7 +37,7 @@ export function registerApi(app: FastifyInstance, d: ApiDeps) {
   const authed = (mutating: boolean) => ({
     preHandler: async (req: FastifyRequest, reply: FastifyReply) => requireUser(req as Authed, reply, mutating),
   });
-  const mutationLimit = { config: { rateLimit: { max: 20, timeWindow: '1 minute' } } };
+  const mutationLimit = limit(20);
 
   app.get('/auth/me', authed(false), async (req) => {
     const u = (req as Authed).user!;
