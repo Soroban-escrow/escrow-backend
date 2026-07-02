@@ -3,6 +3,7 @@ import helmet from '@fastify/helmet';
 import rateLimit from '@fastify/rate-limit';
 import type { Config } from './config.js';
 import { verifySignature } from './github/signature.js';
+import { registerApi, type ApiDeps } from './routes/api.js';
 
 /** Minimal storage the webhook route needs; the real one is Prisma, tests pass a fake. */
 export interface DeliveryStore {
@@ -11,15 +12,20 @@ export interface DeliveryStore {
   enqueue(id: string, event: string, payload: unknown): Promise<void>;
 }
 
-export async function buildServer(cfg: Config, store: DeliveryStore): Promise<FastifyInstance> {
+export async function buildServer(cfg: Config, store: DeliveryStore, api?: ApiDeps): Promise<FastifyInstance> {
   const app = Fastify({ logger: { level: cfg.LOG_LEVEL, redact: ['req.headers.authorization', 'req.headers.cookie'] } });
   await app.register(helmet);
   await app.register(rateLimit, { max: 300, timeWindow: '1 minute' });
 
   // keep the raw body for signature verification
-  app.addContentTypeParser('application/json', { parseAs: 'buffer' }, (_req, body, done) => done(null, body));
+  app.addContentTypeParser('application/json', { parseAs: 'buffer' }, (req, body, done) => {
+    if (req.url.startsWith('/github/webhooks')) return done(null, body);
+    if ((body as Buffer).length === 0) return done(null, undefined);
+    try { done(null, JSON.parse((body as Buffer).toString('utf8'))); } catch { done(Object.assign(new Error('invalid JSON'), { statusCode: 400 }), undefined); }
+  });
 
   app.get('/health', async () => ({ ok: true }));
+  if (api) registerApi(app, api);
 
   app.post('/github/webhooks', async (req, reply) => {
     const raw = req.body as Buffer;
