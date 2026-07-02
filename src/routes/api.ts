@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { createChallenge, unlinkWallet, verifyChallenge, WalletError } from '../auth/wallet.js';
 import { COOKIE, csrfToken, csrfValid, destroySession, getSessionUser } from '../auth/session.js';
 import type { Db } from '../db.js';
+import { registerAdmin, type AdminChain } from './admin.js';
 import { registerFunding, type FundingChain } from './funding.js';
 
 export interface ApiDeps {
@@ -11,7 +12,7 @@ export interface ApiDeps {
   /** called after a wallet is linked (continues pending payouts) */
   onWalletLinked?: (githubId: bigint) => Promise<unknown>;
   /** enables the funding, release and refund routes */
-  chain?: FundingChain;
+  chain?: FundingChain & AdminChain;
 }
 
 const err = (r: FastifyReply, status: number, code: string, message: string) => r.code(status).send({ error: { code, message } });
@@ -77,7 +78,10 @@ export function registerApi(app: FastifyInstance, d: ApiDeps) {
     return { ok: true };
   });
 
-  if (d.chain) registerFunding(app, { db: d.db, chain: d.chain }, authed);
+  if (d.chain) {
+    registerFunding(app, { db: d.db, chain: d.chain }, authed);
+    registerAdmin(app, { db: d.db, chain: d.chain }, authed);
+  }
 
   // ---- public reads ----
   const listQuery = z.object({

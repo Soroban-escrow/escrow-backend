@@ -57,6 +57,22 @@ export function createChain(cfg: ChainConfig) {
       return tx.toXDR();
     },
 
+
+    /** Arbiter-signed open_dispute; the arbiter key never touches the server. */
+    async buildOpenDisputeTx(arbiter: string, bountyId: bigint): Promise<string> {
+      const tx = await client(arbiter).open_dispute({ caller: arbiter, bounty_id: bountyId });
+      const sim = tx.simulation;
+      if (sim && rpc.Api.isSimulationError(sim)) throw new Error(`simulation failed: ${sim.error}`);
+      return tx.toXDR();
+    },
+
+    async buildResolveTx(arbiter: string, bountyId: bigint, winner: string | undefined, winnerBps: number): Promise<string> {
+      const tx = await client(arbiter).resolve({ arbiter, bounty_id: bountyId, winner, winner_bps: winnerBps });
+      const sim = tx.simulation;
+      if (sim && rpc.Api.isSimulationError(sim)) throw new Error(`simulation failed: ${sim.error}`);
+      return tx.toXDR();
+    },
+
     /** Relays a signed transaction. Only single-operation calls to our contract are accepted. */
     async submitSigned(xdr: string, expectedSource?: string): Promise<string> {
       const tx = TransactionBuilder.fromXDR(xdr, cfg.networkPassphrase);

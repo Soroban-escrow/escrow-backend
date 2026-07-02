@@ -3,6 +3,7 @@ import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { createSession } from '../src/auth/session.js';
 import { loadConfig } from '../src/config.js';
 import { createDb } from '../src/db.js';
+import type { AdminChain } from '../src/routes/admin.js';
 import type { FundingChain } from '../src/routes/funding.js';
 import { buildServer } from '../src/server.js';
 
@@ -15,7 +16,9 @@ const WINNER = Keypair.random().publicKey();
 let calls: Record<string, unknown[]>;
 let chainStatus = 'Open';
 let fail: Error | null = null;
-const chain: FundingChain = {
+const chain: FundingChain & AdminChain = {
+  buildOpenDisputeTx: async () => 'OPENXDR',
+  buildResolveTx: async () => 'RESXDR',
   buildFundTx: async (p) => { if (fail) throw fail; (calls.fund ??= []).push(p); return 'FUNDXDR'; },
   buildReleaseTx: async (...a) => { if (fail) throw fail; (calls.release ??= []).push(a); return 'RELXDR'; },
   buildRefundTx: async (...a) => { if (fail) throw fail; (calls.refund ??= []).push(a); return 'REFXDR'; },
