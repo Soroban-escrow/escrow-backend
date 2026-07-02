@@ -61,10 +61,12 @@ export async function applyEvent(tx: Prisma.TransactionClient, ev: ChainEvent, m
     case 'disputed':
       if (b.status !== 'OPEN') return 'anomaly';
       await tx.bounty.update({ where: { id: b.id }, data: { lastEventId: meta.eventId, status: 'DISPUTED' } });
+      await tx.dispute.updateMany({ where: { bountyId: b.id, status: 'requested' }, data: { status: 'opened_onchain' } });
       return 'applied';
     case 'resolved':
       if (b.status !== 'DISPUTED') return 'anomaly';
       await tx.bounty.update({ where: { id: b.id }, data: { ...done, status: 'RESOLVED', winnerAddress: ev.winner } });
+      await tx.dispute.updateMany({ where: { bountyId: b.id, status: { in: ['requested', 'opened_onchain'] } }, data: { status: 'resolved' } });
       return 'applied';
   }
 }

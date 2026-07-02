@@ -81,6 +81,15 @@ describe('applyEvent', () => {
     expect(await db.bounty.count()).toBe(0);
   });
 
+  it('dispute requests follow the chain: opened_onchain, then resolved', async () => {
+    await run(funded(), 1);
+    await db.dispute.create({ data: { bountyId: 1n, openedByGithubId: 9n, reason: 'x', evidence: {}, status: 'requested' } });
+    await run({ kind: 'disputed', id: 1n, caller: addr() }, 2);
+    expect((await db.dispute.findFirstOrThrow()).status).toBe('opened_onchain');
+    await run({ kind: 'resolved', id: 1n, winner: null, winnerNet: 0n, fee: 0n, maintainerAmount: 1000n }, 3);
+    expect((await db.dispute.findFirstOrThrow()).status).toBe('resolved');
+  });
+
   it('refund, and an impossible transition is an anomaly', async () => {
     await run(funded(), 1);
     expect(await run({ kind: 'refunded', id: 1n, amount: 1000n }, 2)).toBe('applied');
