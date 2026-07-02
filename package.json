@@ -6,9 +6,11 @@
   "scripts": {
     "dev": "tsx src/index.ts",
     "test": "vitest run",
-    "typecheck": "tsc -p ."
+    "typecheck": "tsc -p .",
+    "eval:ai": "tsx eval/run.ts"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^1.3.0",
     "@fastify/cookie": "^11.1.5",
     "@fastify/helmet": "^13.2.0",
     "@fastify/rate-limit": "^11.2.1",
