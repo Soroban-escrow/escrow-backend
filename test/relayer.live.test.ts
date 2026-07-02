@@ -28,7 +28,7 @@ describe.runIf(process.env.LIVE_CHAIN && RS && MS && WINNER && TOKEN)('relayer (
 
     const chain = createChain(CFG);
     const relayer = createRelayer({ ...CFG, secret: RS! });
-    const deps = { db, webUrl: 'x', notifier: { notify: async () => {} }, chain: { getBounty: async (b: bigint) => { const x = await chain.getBounty(b); return { status: x.status.tag, relayerAllowed: x.relayer_allowed, maintainer: x.maintainer }; } } };
+    const deps = { db, webUrl: 'x', notifier: { notify: async () => {} }, chain: { getBounty: async (b: bigint) => { const x = await chain.getBounty(b); return { status: x.status.tag, relayerAllowed: x.relayer_allowed, maintainer: x.maintainer, winner: x.winner ?? null }; } } };
 
     expect(await relayerPass(deps, relayer, new Map())).toBe(1);
     const p = await db.payout.findUniqueOrThrow({ where: { idempotencyKey: `release:${id}` } });

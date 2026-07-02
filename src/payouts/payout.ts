@@ -91,6 +91,11 @@ export async function relayRelease(d: PayoutDeps, r: RelayerPort, bountyId: bigi
   if (payout.status === 'SUBMITTED' && payout.txHash) return settle(d, r, payout.id, payout.txHash);
 
   const chain = await d.chain.getBounty(bountyId);
+  // our earlier transaction landed but we crashed before recording it: the chain is the truth
+  if (chain.status === 'Released' && chain.winner && chain.winner === payout.winnerAddress) {
+    await d.db.payout.update({ where: { id: payout.id }, data: { status: 'CONFIRMED', lastError: null } });
+    return 'CONFIRMED';
+  }
   if (chain.status !== 'Open' || !chain.relayerAllowed) {
     await d.db.payout.update({ where: { id: payout.id }, data: { status: 'FAILED', lastError: `bounty is ${chain.status}, relayerAllowed=${chain.relayerAllowed}` } });
     return 'FAILED';

@@ -2,6 +2,8 @@ export interface ChainBounty {
   status: 'Open' | 'Released' | 'Refunded' | 'Disputed' | 'Resolved';
   relayerAllowed: boolean;
   maintainer: string;
+  /** set once released or resolved; lets a retry recognise a payment that already landed */
+  winner?: string | null;
 }
 
 export interface ChainPort {

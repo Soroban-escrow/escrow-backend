@@ -117,6 +117,17 @@ describe('relayRelease', () => {
     expect(await relayRelease(deps(), r, 1n)).toBe('FAILED');
     expect((await db.payout.findFirstOrThrow()).lastError).toBe('InvalidStatus');
   });
+  it('confirms (instead of failing) when the chain shows our payment already landed', async () => {
+    chainState = { status: 'Released', relayerAllowed: true, maintainer: 'GMAINT', winner: 'GWINNER' };
+    const { r, calls } = relayer();
+    expect(await relayRelease(deps(), r, 1n)).toBe('CONFIRMED');
+    expect(calls.submit).toBe(0);
+  });
+  it('but a release to someone else is still a failure', async () => {
+    chainState = { status: 'Released', relayerAllowed: true, maintainer: 'GMAINT', winner: 'GSOMEONEELSE' };
+    const { r } = relayer();
+    expect(await relayRelease(deps(), r, 1n)).toBe('FAILED');
+  });
   it('gives up after 5 transient attempts', async () => {
     const { r } = relayer({ submitRelease: async () => { throw new Error('rpc'); } });
     for (let i = 0; i < 4; i++) await expect(relayRelease(deps(), r, 1n)).rejects.toThrow();

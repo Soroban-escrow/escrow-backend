@@ -30,7 +30,7 @@ const deps = {
   commands: { db, gh, webUrl: cfg.WEB_PUBLIC_URL, minDays: 1, maxDays: 90, tokens: { USDC: { address: usdc, ...limits }, XLM: { address: xlm, ...limits } } },
   pulls: {
     db, webUrl: cfg.WEB_PUBLIC_URL,
-    chain: { getBounty: async (id: bigint) => { const b = await chain.getBounty(id); return { status: b.status.tag, relayerAllowed: b.relayer_allowed, maintainer: b.maintainer }; } },
+    chain: { getBounty: async (id: bigint) => { const b = await chain.getBounty(id); return { status: b.status.tag, relayerAllowed: b.relayer_allowed, maintainer: b.maintainer, winner: b.winner ?? null }; } },
     notifier: { notify: async (b: bigint, pr: number, m: string) => log('notify (no GitHub client yet)', { b: String(b), pr, m }) },
   },
   log,
