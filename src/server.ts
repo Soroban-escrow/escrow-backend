@@ -12,7 +12,7 @@ export interface DeliveryStore {
   enqueue(id: string, event: string, payload: unknown): Promise<void>;
 }
 
-export async function buildServer(cfg: Config, store: DeliveryStore, api?: ApiDeps): Promise<FastifyInstance> {
+export async function buildServer(cfg: Config, store: DeliveryStore, api?: ApiDeps, health?: () => Promise<{ ok: boolean }>): Promise<FastifyInstance> {
   const app = Fastify({ logger: { level: cfg.LOG_LEVEL, redact: ['req.headers.authorization', 'req.headers.cookie'] } });
   await app.register(helmet);
   await app.register(rateLimit, { max: 300, timeWindow: '1 minute' });
@@ -24,7 +24,10 @@ export async function buildServer(cfg: Config, store: DeliveryStore, api?: ApiDe
     try { done(null, JSON.parse((body as Buffer).toString('utf8'))); } catch { done(Object.assign(new Error('invalid JSON'), { statusCode: 400 }), undefined); }
   });
 
-  app.get('/health', async () => ({ ok: true }));
+  app.get('/health', async (_req, reply) => {
+    const h = health ? await health() : { ok: true };
+    return reply.code(h.ok ? 200 : 503).send(h);
+  });
   if (api) registerApi(app, api);
 
   app.post('/github/webhooks', async (req, reply) => {

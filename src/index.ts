@@ -2,6 +2,7 @@ import { loadConfig } from './config.js';
 import { createDb } from './db.js';
 import { createChain } from './chain/client.js';
 import { webhookProducer } from './worker/queue.js';
+import { healthReport } from './ops/health.js';
 import { buildServer, type DeliveryStore } from './server.js';
 
 const cfg = loadConfig();
@@ -20,5 +21,5 @@ const chain = createChain({ rpcUrl: cfg.STELLAR_RPC_URL, networkPassphrase: cfg.
 const app = await buildServer(cfg, store, {
   db, csrfSecret: cfg.CSRF_SECRET,
   chain: { ...chain, getBounty: async (id) => ({ status: (await chain.getBounty(id)).status.tag }) },
-});
+}, () => healthReport({ db, latestLedger: async () => (await chain.server.getLatestLedger()).sequence }));
 await app.listen({ port: cfg.PORT, host: '0.0.0.0' });
