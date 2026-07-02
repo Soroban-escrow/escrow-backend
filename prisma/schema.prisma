@@ -1,0 +1,209 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id             String    @id @default(cuid())
+  githubId       BigInt    @unique
+  githubLogin    String
+  avatarUrl      String?
+  wallet         String?   @unique
+  walletLinkedAt DateTime?
+  isAdmin        Boolean   @default(false)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  sessions       Session[]
+  challenges     WalletChallenge[]
+}
+
+model Session {
+  id        String   @id
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  @@index([userId])
+}
+
+model WalletChallenge {
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id])
+  address   String
+  message   String
+  nonce     String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  @@index([userId])
+}
+
+model Installation {
+  id           BigInt    @id
+  accountLogin String
+  accountType  String
+  suspendedAt  DateTime?
+  createdAt    DateTime  @default(now())
+  repos        Repo[]
+}
+
+model Repo {
+  id             BigInt       @id
+  installationId BigInt
+  installation   Installation @relation(fields: [installationId], references: [id])
+  fullName       String
+  private        Boolean
+  bounties       Bounty[]
+  @@index([installationId])
+}
+
+model FundingIntent {
+  id           String    @id
+  repoId       BigInt
+  issueNumber  Int
+  requestedBy  BigInt
+  token        String
+  amount       Decimal   @db.Decimal(39, 0)
+  durationDays Int
+  commentId    BigInt
+  expiresAt    DateTime
+  usedAt       DateTime?
+  createdAt    DateTime  @default(now())
+  @@index([repoId, issueNumber])
+}
+
+enum BountyStatus {
+  OPEN
+  RELEASED
+  REFUNDED
+  DISPUTED
+  RESOLVED
+}
+
+model Bounty {
+  id                 BigInt       @id
+  repoId             BigInt
+  repo               Repo         @relation(fields: [repoId], references: [id])
+  issueNumber        Int
+  issueTitle         String
+  issueUrl           String
+  criteria           String[]
+  maintainer         String
+  maintainerGithubId BigInt?
+  token              String
+  amount             Decimal      @db.Decimal(39, 0)
+  feeBps             Int
+  deadline           DateTime
+  relayerAllowed     Boolean
+  status             BountyStatus
+  winnerAddress      String?
+  winnerGithubId     BigInt?
+  fundTx             String
+  closeTx            String?
+  cardCommentId      BigInt?
+  lastEventId        String?
+  createdAt          DateTime
+  updatedAt          DateTime     @updatedAt
+  prs                PullRequest[]
+  payouts            Payout[]
+  disputes           Dispute[]
+  @@index([repoId, issueNumber])
+  @@index([status])
+}
+
+model PullRequest {
+  id             BigInt    @id
+  bountyId       BigInt
+  bounty         Bounty    @relation(fields: [bountyId], references: [id])
+  number         Int
+  authorGithubId BigInt
+  authorLogin    String
+  headSha        String
+  state          String
+  mergedAt       DateTime?
+  diffHash       String?
+  reviews        AiReview[]
+  @@unique([bountyId, number])
+}
+
+model AiReview {
+  id           String      @id @default(cuid())
+  prId         BigInt
+  pr           PullRequest @relation(fields: [prId], references: [id])
+  headSha      String
+  model        String
+  verdict      String
+  score        Int
+  result       Json
+  flags        String[]
+  inputTokens  Int
+  outputTokens Int
+  commentId    BigInt?
+  createdAt    DateTime    @default(now())
+  @@unique([prId, headSha])
+}
+
+enum PayoutStatus {
+  PENDING_WALLET
+  QUEUED
+  SUBMITTED
+  CONFIRMED
+  FAILED
+  AWAITING_MAINTAINER
+}
+
+model Payout {
+  id             String       @id @default(cuid())
+  bountyId       BigInt
+  bounty         Bounty       @relation(fields: [bountyId], references: [id])
+  prNumber       Int
+  winnerGithubId BigInt
+  winnerAddress  String?
+  status         PayoutStatus
+  idempotencyKey String       @unique
+  txHash         String?
+  attempts       Int          @default(0)
+  lastError      String?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+}
+
+model Dispute {
+  id               String   @id @default(cuid())
+  bountyId         BigInt
+  bounty           Bounty   @relation(fields: [bountyId], references: [id])
+  openedByGithubId BigInt
+  reason           String
+  evidence         Json
+  status           String
+  resolutionNote   String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+}
+
+model WebhookDelivery {
+  id          String    @id
+  event       String
+  receivedAt  DateTime  @default(now())
+  processedAt DateTime?
+  error       String?
+}
+
+model IndexerCursor {
+  id        String   @id
+  cursor    String?
+  ledger    Int
+  updatedAt DateTime @updatedAt
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  actor     String
+  action    String
+  target    String
+  data      Json
+  createdAt DateTime @default(now())
+}
