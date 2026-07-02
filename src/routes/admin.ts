@@ -28,9 +28,9 @@ export function registerAdmin(app: FastifyInstance, d: AdminDeps, authed: (mutat
     if (!(await guard(req, reply))) return reply;
     const rows = await d.db.dispute.findMany({
       where: { status: { in: ['requested', 'opened_onchain'] } }, orderBy: { createdAt: 'asc' },
-      include: { bounty: { include: { prs: { include: { reviews: { take: 1, orderBy: { createdAt: 'desc' } } } }, payouts: true, repo: { select: { fullName: true } } } } },
+      include: { bounty: { include: { prs: { include: { pr: { include: { reviews: { take: 1, orderBy: { createdAt: 'desc' } } } } } }, payouts: true, repo: { select: { fullName: true } } } } },
     });
-    return ser(rows.map((r) => ({ ...r, overdue: now().getTime() - r.createdAt.getTime() > HOURS * 3600e3 })));
+    return ser(rows.map((r) => ({ ...r, bounty: { ...r.bounty, prs: r.bounty.prs.map((l) => l.pr) }, overdue: now().getTime() - r.createdAt.getTime() > HOURS * 3600e3 })));
   });
 
   const idOk = (id: string) => /^[a-z0-9]{10,40}$/.test(id);

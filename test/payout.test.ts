@@ -17,7 +17,7 @@ const deps = (): PayoutDeps => ({
 beforeEach(async () => {
   chainState = { status: 'Open', relayerAllowed: true, maintainer: 'GMAINT' };
   notes = [];
-  await db.$executeRawUnsafe('TRUNCATE "Payout","Dispute","PullRequest","Bounty","Repo","Installation","User" CASCADE');
+  await db.$executeRawUnsafe('TRUNCATE "Payout","Dispute","PullRequestBounty","PullRequest","Bounty","Repo","Installation","User" CASCADE');
   await db.installation.create({ data: { id: 1n, accountLogin: 'o', accountType: 'User' } });
   await db.repo.create({ data: { id: 100n, installationId: 1n, fullName: 'o/r', private: false } });
   await db.bounty.create({ data: { id: 1n, repoId: 100n, issueNumber: 7, issueTitle: '', issueUrl: '', criteria: [], maintainer: 'GMAINT', token: 'C', amount: '1000', feeBps: 300, deadline: new Date(), relayerAllowed: true, status: 'OPEN', fundTx: 't', createdAt: new Date() } });

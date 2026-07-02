@@ -27,7 +27,7 @@ const bounty = (id: bigint, over: Record<string, unknown> = {}) =>
 
 beforeEach(async () => {
   linked = [];
-  await db.$executeRawUnsafe('TRUNCATE "Payout","PullRequest","Bounty","Repo","Installation","WalletChallenge","Session","User" CASCADE');
+  await db.$executeRawUnsafe('TRUNCATE "Payout","PullRequestBounty","PullRequest","Bounty","Repo","Installation","WalletChallenge","Session","User" CASCADE');
   await db.installation.create({ data: { id: 1n, accountLogin: 'o', accountType: 'User' } });
   await db.repo.create({ data: { id: 100n, installationId: 1n, fullName: 'o/Repo', private: false } });
 });

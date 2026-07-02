@@ -81,7 +81,8 @@ describe('/bounty fund', () => {
 describe('/bounty dispute', () => {
   beforeEach(async () => {
     await db.bounty.create({ data: { id: 1n, repoId: 100n, issueNumber: 7, issueTitle: '', issueUrl: '', criteria: [], maintainer: 'G', maintainerGithubId: 55n, token: 'CUSDC', amount: '1', feeBps: 300, deadline: new Date(), relayerAllowed: true, status: 'OPEN', fundTx: 't', createdAt: new Date() } });
-    await db.pullRequest.create({ data: { id: 5n, bountyId: 1n, number: 3, authorGithubId: 77n, authorLogin: 'contrib', headSha: 'abc', state: 'open' } });
+    await db.pullRequest.create({ data: { id: 5n, number: 3, authorGithubId: 77n, authorLogin: 'contrib', headSha: 'abc', state: 'open' } });
+    await db.pullRequestBounty.create({ data: { prId: 5n, bountyId: 1n } });
   });
   it('lets the maintainer and a PR author open one, but not strangers', async () => {
     expect(await handleIssueComment(deps(), payload('/bounty dispute not paid'))).toBe('dispute-requested');

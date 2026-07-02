@@ -119,10 +119,10 @@ export function registerApi(app: FastifyInstance, d: ApiDeps) {
     if (!/^\d{1,18}$/.test(id)) return err(reply, 404, 'not_found', 'bounty not found');
     const b = await d.db.bounty.findUnique({
       where: { id: BigInt(id) },
-      include: { repo: { select: { fullName: true } }, prs: { include: { reviews: { orderBy: { createdAt: 'desc' }, take: 1 } } }, payouts: true },
+      include: { repo: { select: { fullName: true } }, prs: { include: { pr: { include: { reviews: { orderBy: { createdAt: 'desc' }, take: 1 } } } } }, payouts: true },
     });
     if (!b) return err(reply, 404, 'not_found', 'bounty not found');
-    return ser(b);
+    return ser({ ...b, prs: b.prs.map((l) => l.pr) }); // the API keeps returning a flat PR list
   });
 
   app.get('/me/earnings', authed(false), async (req) => {

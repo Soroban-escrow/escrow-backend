@@ -32,7 +32,7 @@ const pr = (action: string, over: Partial<PullRequestPayload['pull_request']> = 
 
 beforeEach(async () => {
   notes = []; reviews = [];
-  await db.$executeRawUnsafe('TRUNCATE "Payout","PullRequest","Bounty","Repo","Installation","User" CASCADE');
+  await db.$executeRawUnsafe('TRUNCATE "Payout","PullRequestBounty","PullRequest","Bounty","Repo","Installation","User" CASCADE');
   await db.installation.create({ data: { id: 1n, accountLogin: 'o', accountType: 'User' } });
   await db.repo.create({ data: { id: 100n, installationId: 1n, fullName: 'o/r', private: false } });
   await db.bounty.create({ data: { id: 1n, repoId: 100n, issueNumber: 7, issueTitle: '', issueUrl: '', criteria: [], maintainer: 'GMAINT', maintainerGithubId: 55n, token: 'C', amount: '1000', feeBps: 300, deadline: new Date(), relayerAllowed: true, status: 'OPEN', fundTx: 't', createdAt: new Date() } });
@@ -72,5 +72,25 @@ describe('handlePullRequest', () => {
     await handlePullRequest(deps(), pr('closed', { state: 'closed' }));
     expect(await db.payout.count()).toBe(0);
     expect((await db.pullRequest.findUniqueOrThrow({ where: { id: 500n } })).state).toBe('closed');
+  });
+
+  it('one PR can close several bounties: one PR row, one link per bounty, a payout for each on merge', async () => {
+    await db.bounty.create({ data: { id: 2n, repoId: 100n, issueNumber: 8, issueTitle: '', issueUrl: '', criteria: [], maintainer: 'GMAINT', maintainerGithubId: 55n, token: 'C', amount: '2000', feeBps: 300, deadline: new Date(), relayerAllowed: true, status: 'OPEN', fundTx: 't2', createdAt: new Date() } });
+    await db.user.create({ data: { githubId: 9n, githubLogin: 'c', wallet: 'GWIN' } });
+    const body = 'Closes #7 and fixes #8';
+    expect((await handlePullRequest(deps(), pr('opened', { body }))).sort()).toEqual([1n, 2n]);
+    expect(await db.pullRequest.count()).toBe(1);
+    expect(await db.pullRequestBounty.count()).toBe(2);
+    await handlePullRequest(deps(), pr('closed', { body, merged: true, merged_at: '2026-11-02T10:00:00Z', state: 'closed' }));
+    const payouts = await db.payout.findMany({ orderBy: { bountyId: 'asc' } });
+    expect(payouts.map((p) => [p.bountyId, p.status])).toEqual([[1n, 'QUEUED'], [2n, 'QUEUED']]);
+    // replaying the delivery changes nothing
+    await handlePullRequest(deps(), pr('closed', { body, merged: true, merged_at: '2026-11-02T10:00:00Z', state: 'closed' }));
+    expect(await db.payout.count()).toBe(2);
+    expect(await db.pullRequestBounty.count()).toBe(2);
+  });
+  it('a PR that only closes a bounty it may not earn creates nothing', async () => {
+    expect(await handlePullRequest(deps(), pr('opened', { user: { id: 55, login: 'maint', type: 'User' } }))).toEqual([]);
+    expect(await db.pullRequestBounty.count()).toBe(0);
   });
 });

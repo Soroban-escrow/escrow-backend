@@ -28,7 +28,7 @@ async function login(githubId: bigint, isAdmin: boolean) {
 let dispute: string;
 beforeEach(async () => {
   calls = []; fail = null;
-  await db.$executeRawUnsafe('TRUNCATE "AuditLog","Payout","Dispute","PullRequest","Bounty","Repo","Installation","Session","User" CASCADE');
+  await db.$executeRawUnsafe('TRUNCATE "AuditLog","Payout","Dispute","PullRequestBounty","PullRequest","Bounty","Repo","Installation","Session","User" CASCADE');
   await db.installation.create({ data: { id: 1n, accountLogin: 'o', accountType: 'User' } });
   await db.repo.create({ data: { id: 100n, installationId: 1n, fullName: 'o/r', private: false } });
   await db.bounty.create({ data: { id: 1n, repoId: 100n, issueNumber: 7, issueTitle: 'T', issueUrl: '', criteria: [], maintainer: 'GM', token: 'C', amount: '1000', feeBps: 300, deadline: new Date(), relayerAllowed: true, status: 'OPEN', fundTx: 't', createdAt: new Date() } });

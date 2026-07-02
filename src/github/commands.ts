@@ -90,11 +90,11 @@ async function handleDispute(
   const bounty = await d.db.bounty.findFirst({
     where: { repoId: BigInt(p.repository.id), issueNumber: p.issue.number },
     orderBy: { createdAt: 'desc' },
-    include: { prs: true },
+    include: { prs: { include: { pr: true } } },
   });
   if (!bounty) return await reply('There is no bounty on this issue.'), 'rejected:no-bounty';
   const uid = BigInt(p.comment.user.id);
-  const prAuthor = bounty.prs.some((pr) => pr.authorGithubId === uid);
+  const prAuthor = bounty.prs.some((l) => l.pr.authorGithubId === uid);
   if (bounty.maintainerGithubId !== uid && !prAuthor) {
     return await reply('Only the maintainer or an author of a linked PR can open a dispute.'), 'denied';
   }

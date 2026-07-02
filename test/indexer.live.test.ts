@@ -10,7 +10,7 @@ afterAll(() => db.$disconnect());
 // Indexes the real smoke-run events on testnet; LIVE_CHAIN=1 to run. Fails once the RPC retention window passes them.
 describe.runIf(process.env.LIVE_CHAIN)('indexer against testnet', () => {
   it('DB equals chain, and a second pass changes nothing', async () => {
-    await db.$executeRawUnsafe('TRUNCATE "Payout","Dispute","PullRequest","Bounty","FundingIntent","Repo","Installation","IndexerCursor" CASCADE');
+    await db.$executeRawUnsafe('TRUNCATE "Payout","Dispute","PullRequestBounty","PullRequest","Bounty","FundingIntent","Repo","Installation","IndexerCursor" CASCADE');
     await db.installation.create({ data: { id: 1n, accountLogin: 'o', accountType: 'User' } });
     await db.repo.create({ data: { id: 1n, installationId: 1n, fullName: 'o/r', private: false } });
     const chain = createChain({ rpcUrl: 'https://soroban-testnet.stellar.org', networkPassphrase: 'Test SDF Network ; September 2015', contractId: CONTRACT });

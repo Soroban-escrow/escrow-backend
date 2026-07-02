@@ -107,7 +107,7 @@ model Bounty {
   lastEventId        String?
   createdAt          DateTime
   updatedAt          DateTime     @updatedAt
-  prs                PullRequest[]
+  prs                PullRequestBounty[]
   payouts            Payout[]
   disputes           Dispute[]
   @@index([repoId, issueNumber])
@@ -116,8 +116,6 @@ model Bounty {
 
 model PullRequest {
   id             BigInt    @id
-  bountyId       BigInt
-  bounty         Bounty    @relation(fields: [bountyId], references: [id])
   number         Int
   authorGithubId BigInt
   authorLogin    String
@@ -126,7 +124,17 @@ model PullRequest {
   mergedAt       DateTime?
   diffHash       String?
   reviews        AiReview[]
-  @@unique([bountyId, number])
+  bounties       PullRequestBounty[]
+}
+
+/// A PR can close several bountied issues; each link is one (PR, bounty) pair.
+model PullRequestBounty {
+  prId     BigInt
+  bountyId BigInt
+  pr       PullRequest @relation(fields: [prId], references: [id])
+  bounty   Bounty      @relation(fields: [bountyId], references: [id])
+  @@id([prId, bountyId])
+  @@index([bountyId])
 }
 
 model AiReview {

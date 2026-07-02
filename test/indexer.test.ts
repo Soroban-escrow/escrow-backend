@@ -49,7 +49,7 @@ const run = (ev: ChainEvent, n: number) => db.$transaction((tx) => applyEvent(tx
 
 describe('applyEvent', () => {
   beforeEach(async () => {
-    await db.$executeRawUnsafe('TRUNCATE "Payout","Dispute","PullRequest","Bounty","FundingIntent","Repo","Installation" CASCADE');
+    await db.$executeRawUnsafe('TRUNCATE "Payout","Dispute","PullRequestBounty","PullRequest","Bounty","FundingIntent","Repo","Installation" CASCADE');
     await db.installation.create({ data: { id: 1n, accountLogin: 'o', accountType: 'User' } });
     await db.repo.create({ data: { id: 100n, installationId: 1n, fullName: 'o/r', private: false } });
   });

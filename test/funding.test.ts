@@ -41,7 +41,7 @@ const post = (a: Awaited<ReturnType<typeof app>>, url: string, h: object, payloa
 
 beforeEach(async () => {
   calls = {}; chainStatus = 'Open'; fail = null;
-  await db.$executeRawUnsafe('TRUNCATE "Payout","PullRequest","Bounty","FundingIntent","Repo","Installation","WalletChallenge","Session","User" CASCADE');
+  await db.$executeRawUnsafe('TRUNCATE "Payout","PullRequestBounty","PullRequest","Bounty","FundingIntent","Repo","Installation","WalletChallenge","Session","User" CASCADE');
   await db.installation.create({ data: { id: 1n, accountLogin: 'o', accountType: 'User' } });
   await db.repo.create({ data: { id: 100n, installationId: 1n, fullName: 'o/r', private: false } });
 });

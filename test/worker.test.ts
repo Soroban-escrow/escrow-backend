@@ -21,7 +21,7 @@ const deps = (): DispatchDeps => ({
 
 beforeEach(async () => {
   comments = [];
-  await db.$executeRawUnsafe('TRUNCATE "Payout","PullRequest","Bounty","FundingIntent","Repo","Installation" CASCADE');
+  await db.$executeRawUnsafe('TRUNCATE "Payout","PullRequestBounty","PullRequest","Bounty","FundingIntent","Repo","Installation" CASCADE');
 });
 
 const install = { action: 'created', installation: { id: 9, account: { login: 'o', type: 'Organization' } }, repositories: [{ id: 100, full_name: 'o/r', private: false }] };

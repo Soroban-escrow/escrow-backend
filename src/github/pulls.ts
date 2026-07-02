@@ -33,25 +33,23 @@ export async function handlePullRequest(d: PullDeps, p: PullRequestPayload): Pro
   const bounties = await d.db.bounty.findMany({
     where: { repoId: BigInt(p.repository.id), issueNumber: { in: issues }, status: { in: ['OPEN', 'DISPUTED'] } },
   });
-  const touched: bigint[] = [];
-  for (const b of bounties) {
-    // the maintainer's own PRs never earn the bounty (also blocked on-chain)
-    if (b.maintainerGithubId === BigInt(pr.user.id)) continue;
-    const state = pr.merged ? 'merged' : pr.state === 'closed' ? 'closed' : 'open';
-    const data = {
-      number: pr.number, authorGithubId: BigInt(pr.user.id), authorLogin: pr.user.login,
-      headSha: pr.head.sha, state, mergedAt: pr.merged_at ? new Date(pr.merged_at) : null,
-    };
-    const existing = await d.db.pullRequest.findUnique({ where: { id: BigInt(pr.id) } });
-    // once merged, the record is frozen
-    if (existing?.state === 'merged') continue;
-    await d.db.pullRequest.upsert({ where: { id: BigInt(pr.id) }, create: { id: BigInt(pr.id), bountyId: b.id, ...data }, update: data });
-    touched.push(b.id);
-    if (pr.merged && p.action === 'closed') {
-      await onMerge(d, { bountyId: b.id, prNumber: pr.number, authorGithubId: BigInt(pr.user.id) });
-    } else if (['opened', 'synchronize', 'reopened', 'ready_for_review'].includes(p.action) && !pr.draft) {
-      d.reviewTrigger?.(BigInt(pr.id));
-    }
+  // the maintainer's own PRs never earn the bounty (also blocked on-chain)
+  const eligible = bounties.filter((b) => b.maintainerGithubId !== BigInt(pr.user.id));
+  if (eligible.length === 0) return [];
+  const prId = BigInt(pr.id);
+  const existing = await d.db.pullRequest.findUnique({ where: { id: prId } });
+  if (existing?.state === 'merged') return []; // once merged, the record is frozen
+  const data = {
+    number: pr.number, authorGithubId: BigInt(pr.user.id), authorLogin: pr.user.login,
+    headSha: pr.head.sha, state: pr.merged ? 'merged' : pr.state === 'closed' ? 'closed' : 'open',
+    mergedAt: pr.merged_at ? new Date(pr.merged_at) : null,
+  };
+  await d.db.pullRequest.upsert({ where: { id: prId }, create: { id: prId, ...data }, update: data });
+  // one PR can close several bountied issues: one link per (PR, bounty)
+  for (const b of eligible) {
+    await d.db.pullRequestBounty.upsert({ where: { prId_bountyId: { prId, bountyId: b.id } }, create: { prId, bountyId: b.id }, update: {} });
+    if (pr.merged && p.action === 'closed') await onMerge(d, { bountyId: b.id, prNumber: pr.number, authorGithubId: BigInt(pr.user.id) });
   }
-  return touched;
+  if (!pr.merged && ['opened', 'synchronize', 'reopened', 'ready_for_review'].includes(p.action) && !pr.draft) d.reviewTrigger?.(prId);
+  return eligible.map((b) => b.id);
 }
