@@ -41,6 +41,22 @@ export function createChain(cfg: ChainConfig) {
       return tx.toXDR();
     },
 
+
+    /** Unsigned release(maintainer, id, winner) for maintainers who did not opt in to the relayer. */
+    async buildReleaseTx(maintainer: string, bountyId: bigint, winner: string): Promise<string> {
+      const tx = await client(maintainer).release({ caller: maintainer, bounty_id: bountyId, winner });
+      const sim = tx.simulation;
+      if (sim && rpc.Api.isSimulationError(sim)) throw new Error(`simulation failed: ${sim.error}`);
+      return tx.toXDR();
+    },
+
+    async buildRefundTx(maintainer: string, bountyId: bigint): Promise<string> {
+      const tx = await client(maintainer).refund({ maintainer, bounty_id: bountyId });
+      const sim = tx.simulation;
+      if (sim && rpc.Api.isSimulationError(sim)) throw new Error(`simulation failed: ${sim.error}`);
+      return tx.toXDR();
+    },
+
     /** Relays a signed transaction. Only single-operation calls to our contract are accepted. */
     async submitSigned(xdr: string, expectedSource?: string): Promise<string> {
       const tx = TransactionBuilder.fromXDR(xdr, cfg.networkPassphrase);

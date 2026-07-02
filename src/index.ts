@@ -1,5 +1,6 @@
 import { loadConfig } from './config.js';
 import { createDb } from './db.js';
+import { createChain } from './chain/client.js';
 import { buildServer, type DeliveryStore } from './server.js';
 
 const cfg = loadConfig();
@@ -14,5 +15,9 @@ const store: DeliveryStore = {
   enqueue: async (id, event) => { console.log(JSON.stringify({ msg: 'webhook queued (no consumer yet)', id, event })); },
 };
 
-const app = await buildServer(cfg, store, { db, csrfSecret: cfg.CSRF_SECRET });
+const chain = createChain({ rpcUrl: cfg.STELLAR_RPC_URL, networkPassphrase: cfg.STELLAR_NETWORK_PASSPHRASE, contractId: cfg.BOUNTY_CONTRACT_ID });
+const app = await buildServer(cfg, store, {
+  db, csrfSecret: cfg.CSRF_SECRET,
+  chain: { ...chain, getBounty: async (id) => ({ status: (await chain.getBounty(id)).status.tag }) },
+});
 await app.listen({ port: cfg.PORT, host: '0.0.0.0' });

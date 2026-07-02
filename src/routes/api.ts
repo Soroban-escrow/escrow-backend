@@ -3,12 +3,15 @@ import { z } from 'zod';
 import { createChallenge, unlinkWallet, verifyChallenge, WalletError } from '../auth/wallet.js';
 import { COOKIE, csrfToken, csrfValid, destroySession, getSessionUser } from '../auth/session.js';
 import type { Db } from '../db.js';
+import { registerFunding, type FundingChain } from './funding.js';
 
 export interface ApiDeps {
   db: Db;
   csrfSecret: string;
   /** called after a wallet is linked (continues pending payouts) */
   onWalletLinked?: (githubId: bigint) => Promise<unknown>;
+  /** enables the funding, release and refund routes */
+  chain?: FundingChain;
 }
 
 const err = (r: FastifyReply, status: number, code: string, message: string) => r.code(status).send({ error: { code, message } });
@@ -73,6 +76,8 @@ export function registerApi(app: FastifyInstance, d: ApiDeps) {
     await unlinkWallet({ db: d.db }, (req as Authed).user!.id);
     return { ok: true };
   });
+
+  if (d.chain) registerFunding(app, { db: d.db, chain: d.chain }, authed);
 
   // ---- public reads ----
   const listQuery = z.object({
