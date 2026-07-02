@@ -3,6 +3,7 @@ import { createChain } from '../chain/client.js';
 import { createDb } from '../db.js';
 import { run as runIndexer } from '../indexer/indexer.js';
 import { alertSender, collectAlerts } from '../ops/alerts.js';
+import { sendRefundReminders } from '../ops/reminders.js';
 import { runRelayer } from '../payouts/loop.js';
 import { createRelayer } from '../payouts/relayer.js';
 import type { GithubPort } from '../github/commands.js';
@@ -42,6 +43,13 @@ const relayer = cfg.RELAYER_SECRET
 if (relayer) void runRelayer(deps.pulls, relayer, ac.signal, 5000, log);
 else log('relayer disabled: RELAYER_SECRET not set (testnet/dev only; mainnet needs a KMS signer)');
 
+// Reminders become real issue comments once the GitHub client exists; until then they only log
+// (and are NOT marked as sent, so they go out after the App is registered).
+const reminderTimer = setInterval(() => {
+  sendRefundReminders({ db, graceMs: 72 * 3600e3, webUrl: cfg.WEB_PUBLIC_URL, commenter: { comment: async () => { throw new Error('GitHub App is not configured'); } } })
+    .catch((e) => log('reminders skipped', e instanceof Error ? e.message : String(e)));
+}, 3600e3);
+
 const send = alertSender(cfg.ALERT_WEBHOOK_URL, log);
 const alertTimer = setInterval(async () => {
   try {
@@ -52,5 +60,5 @@ const alertTimer = setInterval(async () => {
 const w = webhookWorker(cfg.REDIS_URL, async (job) => log('webhook handled', { id: job.id, event: job.event, result: await dispatchWebhook(deps as never, job.event, job.payload) }));
 w.worker.on('failed', (j, e) => log('webhook job failed', { id: j?.id, error: e.message }));
 void runIndexer({ db, server: chain.server, contractId: cfg.BOUNTY_CONTRACT_ID, log }, ac.signal);
-for (const s of ['SIGINT', 'SIGTERM'] as const) process.on(s, () => { ac.abort(); clearInterval(alertTimer); void w.close().then(() => process.exit(0)); });
+for (const s of ['SIGINT', 'SIGTERM'] as const) process.on(s, () => { ac.abort(); clearInterval(alertTimer); clearInterval(reminderTimer); void w.close().then(() => process.exit(0)); });
 log('worker started');
