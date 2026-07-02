@@ -19,7 +19,7 @@ describe('decodeEvent', () => {
       topic: [sym('bounty'), sym('funded'), u64(1n)],
       value: nativeToScVal(
         { amount: 100000000n, deadline: 1793802289n, fee_bps: 300, issue: 17n, maintainer, relayer_allowed: true, repo_id: 1n, token: 'CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC' },
-        { type: { amount: ['symbol', 'i128'], deadline: ['symbol', 'u64'], fee_bps: ['symbol', 'u32'], issue: ['symbol', 'u64'], maintainer: ['symbol', 'address'], relayer_allowed: ['symbol', 'bool'], repo_id: ['symbol', 'u64'], token: ['symbol', 'address'] } },
+        { type: { amount: ['symbol', 'i128'], deadline: ['symbol', 'u64'], fee_bps: ['symbol', 'u32'], issue: ['symbol', 'u64'], maintainer: ['symbol', 'address'], relayer_allowed: ['symbol', 'bool'], repo_id: ['symbol', 'u64'], token: ['symbol', 'address'] } as never },
       ),
     });
     expect(ev).toMatchObject({ kind: 'funded', id: 1n, amount: 100000000n, feeBps: 300, relayerAllowed: true, maintainer });
