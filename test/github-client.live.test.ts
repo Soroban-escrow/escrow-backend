@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 import { loadConfig, loadDotEnv } from '../src/config.js';
 import { createGithubClient } from '../src/github/client.js';
 
@@ -6,10 +6,14 @@ import { createGithubClient } from '../src/github/client.js';
 // LIVE_GITHUB=1 LIVE_REPO=owner/name LIVE_ISSUE=1 LIVE_INSTALLATION=123 LIVE_OWNER=login
 const { LIVE_GITHUB, LIVE_REPO, LIVE_ISSUE, LIVE_INSTALLATION, LIVE_OWNER } = process.env;
 describe.runIf(LIVE_GITHUB && LIVE_REPO && LIVE_ISSUE && LIVE_INSTALLATION && LIVE_OWNER)('GitHub client (real GitHub)', () => {
-  loadDotEnv();
-  const cfg = loadConfig();
-  const gh = createGithubClient({ appId: cfg.GITHUB_APP_ID!, privateKey: cfg.GITHUB_APP_PRIVATE_KEY! });
-  const inst = BigInt(LIVE_INSTALLATION!), repo = LIVE_REPO!, issue = Number(LIVE_ISSUE);
+  // set up lazily: vitest still evaluates the body of a skipped suite, and CI has no .env
+  let gh: ReturnType<typeof createGithubClient>;
+  const inst = BigInt(LIVE_INSTALLATION ?? 0), repo = LIVE_REPO ?? '', issue = Number(LIVE_ISSUE);
+  beforeAll(() => {
+    loadDotEnv();
+    const cfg = loadConfig();
+    gh = createGithubClient({ appId: cfg.GITHUB_APP_ID!, privateKey: cfg.GITHUB_APP_PRIVATE_KEY! });
+  });
 
   it('reads the issue and the owner permission', async () => {
     const i = await gh.getIssue(inst, repo, issue);
