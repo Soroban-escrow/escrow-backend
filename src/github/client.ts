@@ -68,6 +68,18 @@ export function createGithubClient(cfg: GithubClientConfig) {
   }
 
   const client = {
+    /** All installations of this App (authenticated as the App itself, not an installation). */
+    async listInstallations(): Promise<{ id: number; account: { login: string; type: string }; suspended_at: string | null }[]> {
+      const r = await doFetch(`${api}/app/installations?per_page=100`, { headers: { ...base, authorization: `Bearer ${appJwt()}` } });
+      if (!r.ok) throw new GithubError(r.status, `list installations: ${r.status}`);
+      return (await r.json()) as never;
+    },
+
+    async listRepositories(installation: bigint): Promise<{ id: number; full_name: string; private: boolean }[]> {
+      const j = await json<{ repositories: { id: number; full_name: string; private: boolean }[] }>(installation, 'GET', '/installation/repositories?per_page=100');
+      return j.repositories;
+    },
+
     /** repo permission of a user: admin | maintain | write | triage | read | none */
     async getPermission(installation: bigint, repo: string, login: string): Promise<string> {
       if (!LOGIN.test(login)) throw new Error('invalid login');

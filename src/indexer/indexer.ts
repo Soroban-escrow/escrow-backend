@@ -56,7 +56,8 @@ export async function pollOnce(d: IndexerDeps, startLedgerFallback?: number): Pr
     }
     const applied: { bountyId: bigint; kind: string }[] = [];
     await d.db.$transaction(async (tx) => {
-      let ledger = saved?.ledger ?? 0;
+      // follow the cursor, not just events: a quiet contract must still show an up-to-date ledger (health, lag alerts)
+      let ledger = Math.max(saved?.ledger ?? 0, cursorLedger(res.cursor));
       for (const raw of res.events) {
         if (raw.inSuccessfulContractCall === false) continue;
         const ev = decodeEvent(raw);
