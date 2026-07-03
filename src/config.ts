@@ -21,6 +21,7 @@ const schema = z.object({
   GITHUB_APP_PRIVATE_KEY: z.string().includes('PRIVATE KEY').optional(),
   GITHUB_CLIENT_ID: z.string().min(1).optional(),
   GITHUB_CLIENT_SECRET: z.string().min(1).optional(),
+  ADMIN_GITHUB_IDS: z.string().regex(/^\d+(,\d+)*$/).optional(),
   RELAYER_SECRET: z.string().regex(/^S[A-Z2-7]{55}$/).optional(),
   RELAYER_MIN_XLM_ALERT: z.coerce.number().default(50),
   ALERT_WEBHOOK_URL: z.string().url().optional(),

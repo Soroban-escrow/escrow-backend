@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { createChallenge, unlinkWallet, verifyChallenge, WalletError } from '../auth/wallet.js';
 import { COOKIE, csrfToken, csrfValid, destroySession, getSessionUser } from '../auth/session.js';
+import { clearStateCookie, finishLogin, LoginError, OAUTH_COOKIE, sessionCookie, startLogin, stateCookie, type LoginDeps } from '../auth/github-login.js';
 import type { Db } from '../db.js';
 import { mutationLimit as limit } from './limits.js';
 import { registerAdmin, type AdminChain } from './admin.js';
@@ -14,6 +15,8 @@ export interface ApiDeps {
   onWalletLinked?: (githubId: bigint) => Promise<unknown>;
   /** enables the funding, release and refund routes */
   chain?: FundingChain & AdminChain;
+  /** enables GitHub sign-in (/auth/login, /auth/callback) */
+  login?: LoginDeps;
 }
 
 const err = (r: FastifyReply, status: number, code: string, message: string) => r.code(status).send({ error: { code, message } });
@@ -38,6 +41,24 @@ export function registerApi(app: FastifyInstance, d: ApiDeps) {
     preHandler: async (req: FastifyRequest, reply: FastifyReply) => requireUser(req as Authed, reply, mutating),
   });
   const mutationLimit = limit(20);
+
+  if (d.login) {
+    const login = d.login;
+    const secure = login.callbackUrl.startsWith('https://');
+    app.get('/auth/login', async (req, reply) => {
+      const { url, cookie } = startLogin(login, (req.query as { next?: string }).next);
+      return reply.header('set-cookie', stateCookie(cookie, secure)).redirect(url);
+    });
+    app.get('/auth/callback', { config: { rateLimit: { max: 30, timeWindow: '1 minute' } } }, async (req, reply) => {
+      try {
+        const r = await finishLogin(login, req.query as { code?: string; state?: string }, cookies(req)[OAUTH_COOKIE]);
+        return reply.header('set-cookie', [sessionCookie(r.sessionId, r.maxAgeSeconds, secure), clearStateCookie]).redirect(r.redirect);
+      } catch (e) {
+        if (e instanceof LoginError) return reply.header('set-cookie', clearStateCookie).code(e.status).send({ error: { code: e.code, message: e.message } });
+        throw e;
+      }
+    });
+  }
 
   app.get('/auth/me', authed(false), async (req) => {
     const u = (req as Authed).user!;

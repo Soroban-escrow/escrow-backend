@@ -21,6 +21,7 @@ const store: DeliveryStore = {
 const chain = createChain({ rpcUrl: cfg.STELLAR_RPC_URL, networkPassphrase: cfg.STELLAR_NETWORK_PASSPHRASE, contractId: cfg.BOUNTY_CONTRACT_ID });
 const app = await buildServer(cfg, store, {
   db, csrfSecret: cfg.CSRF_SECRET,
+  ...(cfg.GITHUB_CLIENT_ID && cfg.GITHUB_CLIENT_SECRET ? { login: { db, clientId: cfg.GITHUB_CLIENT_ID, clientSecret: cfg.GITHUB_CLIENT_SECRET, callbackUrl: `${cfg.API_PUBLIC_URL}/auth/callback`, webUrl: cfg.WEB_PUBLIC_URL, secret: cfg.SESSION_SECRET, adminGithubIds: (cfg.ADMIN_GITHUB_IDS ?? '').split(',').filter(Boolean).map(BigInt) } } : {}),
   chain: { ...chain, getBounty: async (id) => ({ status: (await chain.getBounty(id)).status.tag }) },
 }, () => healthReport({ db, latestLedger: async () => (await chain.server.getLatestLedger()).sequence }));
 await app.listen({ port: cfg.PORT, host: '0.0.0.0' });
