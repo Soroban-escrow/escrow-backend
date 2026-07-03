@@ -6,10 +6,13 @@ import { alertSender, collectAlerts } from '../ops/alerts.js';
 import { sendRefundReminders } from '../ops/reminders.js';
 import { runRelayer } from '../payouts/loop.js';
 import { createRelayer } from '../payouts/relayer.js';
+import { anthropicModel } from '../ai/anthropic.js';
+import { runPrReview } from '../ai/pipeline.js';
 import { createGithubClient, asPort } from '../github/client.js';
 import type { GithubPort } from '../github/commands.js';
-import { githubIssueCommenter, githubNotifier, refreshBountyCard } from '../github/sync.js';
+import { announcePayout, githubIssueCommenter, githubNotifier, refreshBountyCard } from '../github/sync.js';
 import { dispatchWebhook } from './dispatch.js';
+import { reviewProducer, reviewWorker } from './review-queue.js';
 import { webhookWorker } from './queue.js';
 
 loadDotEnv();
@@ -30,11 +33,16 @@ const usdc = cfg.TOKEN_USDC_CONTRACT_ID;
 const xlm = cfg.TOKEN_XLM_CONTRACT_ID;
 const limits = { min: 10_000_000n, max: 5_000_000_000n };
 const symbolFor = (t: string) => (t === usdc ? 'USDC' : t === xlm ? 'XLM' : `${t.slice(0, 4)}…`);
+// AI review: needs the GitHub App (to read PRs and comment) and an Anthropic key. Off otherwise.
+const reviewsOn = Boolean(ghClient && cfg.ANTHROPIC_API_KEY);
+const reviews = reviewsOn ? reviewProducer(cfg.REDIS_URL) : null;
+if (!reviewsOn) log('AI review disabled: needs the GitHub App and ANTHROPIC_API_KEY');
+
 const deps = {
   db,
-  commands: { db, gh, webUrl: cfg.WEB_PUBLIC_URL, minDays: 1, maxDays: 90, tokens: { USDC: { address: usdc, ...limits }, XLM: { address: xlm, ...limits } } },
+  commands: { db, gh, webUrl: cfg.WEB_PUBLIC_URL, ...(reviews ? { requestReview: (id: bigint) => reviews.schedule(id, 0, true) } : {}), minDays: 1, maxDays: 90, tokens: { USDC: { address: usdc, ...limits }, XLM: { address: xlm, ...limits } } },
   pulls: {
-    db, webUrl: cfg.WEB_PUBLIC_URL,
+    db, webUrl: cfg.WEB_PUBLIC_URL, ...(reviews ? { reviewTrigger: (id: bigint) => void reviews.schedule(id).catch((e) => log('review schedule failed', e instanceof Error ? e.message : String(e))) } : {}),
     chain: { getBounty: async (id: bigint) => { const b = await chain.getBounty(id); return { status: b.status.tag, relayerAllowed: b.relayer_allowed, maintainer: b.maintainer, winner: b.winner ?? null }; } },
     notifier: ghClient ? githubNotifier({ db, gh: ghClient }) : { notify: async (b: bigint, pr: number, m: string) => log('notify skipped (GitHub App not configured)', { b: String(b), pr, m }) },
   },
@@ -42,6 +50,15 @@ const deps = {
 };
 
 const ac = new AbortController();
+const reviewConsumer = reviewsOn
+  ? reviewWorker(cfg.REDIS_URL, async (prId, force) => {
+      const outcome = await runPrReview({
+        db, gh: ghClient!, model: anthropicModel(cfg.ANTHROPIC_API_KEY!, cfg.AI_MODEL), modelName: cfg.AI_MODEL,
+        maxPerPrPerDay: cfg.AI_MAX_REVIEWS_PER_PR_PER_DAY, maxPerRepoPerDay: cfg.AI_MAX_REVIEWS_PER_REPO_PER_DAY, log,
+      }, prId, { force });
+      log('review', { pr: String(prId), outcome });
+    })
+  : null;
 const relayer = cfg.RELAYER_SECRET
   ? createRelayer({ rpcUrl: cfg.STELLAR_RPC_URL, networkPassphrase: cfg.STELLAR_NETWORK_PASSPHRASE, contractId: cfg.BOUNTY_CONTRACT_ID, secret: cfg.RELAYER_SECRET })
   : null;
@@ -65,8 +82,13 @@ const w = webhookWorker(cfg.REDIS_URL, async (job) => log('webhook handled', { i
 w.worker.on('failed', (j, e) => log('webhook job failed', { id: j?.id, error: e.message }));
 // every chain event for a bounty refreshes its GitHub card (best effort; the chain is the truth)
 const onApplied = ghClient
-  ? ({ bountyId }: { bountyId: bigint; kind: string }) => { void refreshBountyCard({ db, gh: ghClient, webUrl: cfg.WEB_PUBLIC_URL, symbolFor, log }, bountyId).catch((e) => log('card refresh failed', e instanceof Error ? e.message : String(e))); }
+  ? ({ bountyId, kind }: { bountyId: bigint; kind: string }) => {
+      const sync = { db, gh: ghClient, webUrl: cfg.WEB_PUBLIC_URL, symbolFor, log };
+      const fail = (what: string) => (e: unknown) => log(`${what} failed`, e instanceof Error ? e.message : String(e));
+      if (kind === 'released') void announcePayout({ ...sync, explorerTx: (h) => cfg.EXPLORER_TX_URL_TEMPLATE.replace('{hash}', encodeURIComponent(h)) }, bountyId).catch(fail('payout announcement'));
+      void refreshBountyCard(sync, bountyId).catch(fail('card refresh'));
+    }
   : undefined;
 void runIndexer({ db, server: chain.server, contractId: cfg.BOUNTY_CONTRACT_ID, log, ...(onApplied ? { onApplied } : {}) }, ac.signal);
-for (const s of ['SIGINT', 'SIGTERM'] as const) process.on(s, () => { ac.abort(); clearInterval(alertTimer); clearInterval(reminderTimer); void w.close().then(() => process.exit(0)); });
+for (const s of ['SIGINT', 'SIGTERM'] as const) process.on(s, () => { ac.abort(); clearInterval(alertTimer); clearInterval(reminderTimer); void Promise.all([w.close(), reviewConsumer?.close(), reviews?.close()]).then(() => process.exit(0)); });
 log('worker started');

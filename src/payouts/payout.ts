@@ -121,7 +121,7 @@ async function settle(d: PayoutDeps, r: RelayerPort, id: string, hash: string): 
   }
   if (res === 'SUCCESS') {
     await d.db.payout.update({ where: { id }, data: { status: 'CONFIRMED', txHash: hash } });
-    await safeNotify(d, row.bountyId, row.prNumber, `Paid. Transaction ${hash}`);
+    // the "Paid X to @login" comment is posted when the indexer sees the release event (covers every release path)
     return 'CONFIRMED';
   }
   await d.db.payout.update({ where: { id }, data: { status: 'FAILED', lastError: 'transaction failed on chain' } });

@@ -1,5 +1,5 @@
 import type { Db } from '../db.js';
-import { fromBaseUnits } from '@skillescrow/shared';
+import { fromBaseUnits, net } from '@skillescrow/shared';
 import { labelFor, renderCard } from './card.js';
 import { parseCriteria } from './criteria.js';
 import type { Notifier } from '../payouts/ports.js';
@@ -93,3 +93,23 @@ export const formatPaid = (amount: bigint, feeBps: number, symbol: string) => {
   const net = amount - (amount * BigInt(feeBps)) / 10_000n;
   return `${fromBaseUnits(net, 7, 2)} ${symbol}`;
 };
+
+/**
+ * "Paid 4.85 XLM to @login (tx)" on the PR, once per bounty. Covers every release path (relayer or the
+ * maintainer signing). Marked in the audit log so a replayed event never comments twice.
+ */
+export async function announcePayout(d: SyncDeps & { explorerTx: (hash: string) => string }, bountyId: bigint): Promise<'announced' | 'skipped'> {
+  const b = await d.db.bounty.findUnique({ where: { id: bountyId }, include: { repo: true, prs: { include: { pr: true } } } });
+  if (!b || b.status !== 'RELEASED' || !b.closeTx || !b.winnerAddress) return 'skipped';
+  const target = `bounty:${b.id}`;
+  if (await d.db.auditLog.findFirst({ where: { action: 'payout.announced', target } })) return 'skipped';
+
+  const payout = await d.db.payout.findUnique({ where: { idempotencyKey: `release:${b.id}` } });
+  const link = payout ? b.prs.find((l) => l.pr.number === payout.prNumber) : undefined;
+  const who = link ? `@${link.pr.authorLogin}` : `\`${b.winnerAddress.slice(0, 6)}…${b.winnerAddress.slice(-4)}\``;
+  const amount = `${fromBaseUnits(net(BigInt(b.amount.toString()), b.feeBps), 7, 2)} ${d.symbolFor(b.token)}`;
+  const body = `**Paid ${amount} to ${who}.** [Transaction ${b.closeTx.slice(0, 8)}…](${d.explorerTx(b.closeTx)})`;
+  await d.gh.postComment(b.repo.installationId, b.repo.fullName, payout?.prNumber ?? b.issueNumber, body);
+  await d.db.auditLog.create({ data: { actor: 'system', action: 'payout.announced', target, data: { tx: b.closeTx } } });
+  return 'announced';
+}

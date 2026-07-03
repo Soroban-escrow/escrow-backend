@@ -32,7 +32,7 @@ const payload = (body: string, over: Partial<IssueCommentPayload> = {}): IssueCo
 beforeEach(async () => {
   comments = [];
   perm = 'write';
-  await db.$executeRawUnsafe('TRUNCATE "Payout","Dispute","AuditLog","PullRequest","Bounty","FundingIntent","Repo","Installation" CASCADE');
+  await db.$executeRawUnsafe('TRUNCATE "Payout","Dispute","AuditLog","PullRequestBounty","PullRequest","Bounty","FundingIntent","Repo","Installation" CASCADE');
   await db.installation.create({ data: { id: 9n, accountLogin: 'o', accountType: 'User' } });
   await db.repo.create({ data: { id: 100n, installationId: 9n, fullName: 'o/r', private: false } });
 });
@@ -97,5 +97,31 @@ describe('/bounty dispute', () => {
   });
   it('rejects when there is no bounty', async () => {
     expect(await handleIssueComment(deps(), payload('/bounty dispute x', { issue: { number: 99, state: 'open' } }))).toBe('rejected:no-bounty');
+  });
+});
+
+describe('/bounty review (on a PR)', () => {
+  let requested: bigint[];
+  const withReview = (): CommandDeps => ({ ...deps(), requestReview: async (id) => void requested.push(id) });
+  beforeEach(async () => {
+    requested = [];
+    await db.bounty.create({ data: { id: 1n, repoId: 100n, issueNumber: 7, issueTitle: '', issueUrl: '', criteria: [], maintainer: 'G', maintainerGithubId: 55n, token: 'CUSDC', amount: '1', feeBps: 300, deadline: new Date(), relayerAllowed: true, status: 'OPEN', fundTx: 't', createdAt: new Date() } });
+    await db.pullRequest.create({ data: { id: 5n, number: 12, authorGithubId: 77n, authorLogin: 'contrib', headSha: 'abc', state: 'open' } });
+    await db.pullRequestBounty.create({ data: { prId: 5n, bountyId: 1n } });
+  });
+  const onPr = (n: number) => payload('/bounty review', { issue: { number: n, state: 'open', pull_request: {} } });
+
+  it('queues a forced re-review for a linked PR when a writer asks', async () => {
+    expect(await handleIssueComment(withReview(), onPr(12))).toBe('review-requested');
+    expect(requested).toEqual([5n]);
+    expect(comments[0]).toContain('Re-review queued');
+  });
+  it('refuses non-writers, unlinked PRs, and does nothing on plain issues', async () => {
+    perm = 'read';
+    expect(await handleIssueComment(withReview(), onPr(12))).toBe('denied');
+    perm = 'write';
+    expect(await handleIssueComment(withReview(), onPr(99))).toBe('rejected:not-linked');
+    expect(await handleIssueComment(withReview(), payload('/bounty review'))).toBe('ignored:review-not-on-issues');
+    expect(requested).toEqual([]);
   });
 });

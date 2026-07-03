@@ -17,6 +17,8 @@ export interface CommandDeps {
   minDays: number;
   maxDays: number;
   now?: () => Date;
+  /** schedules an immediate forced re-review of a PR (wired to the review queue) */
+  requestReview?: (prId: bigint) => Promise<void>;
 }
 
 export interface IssueCommentPayload {
@@ -46,7 +48,16 @@ export async function handleIssueComment(d: CommandDeps, p: IssueCommentPayload)
 
   if (cmd.kind === 'help') return await reply(HELP), 'help';
   if (cmd.kind === 'error') return await reply(`${cmd.message}\n\n${HELP}`), 'error';
-  if (cmd.kind === 'review') return 'ignored:review-not-on-issues';
+  if (cmd.kind === 'review') {
+    if (!p.issue.pull_request) return 'ignored:review-not-on-issues';
+    const perm = await d.gh.getPermission(inst, repo, p.comment.user.login);
+    if (!WRITERS.has(perm)) return await reply(`@${p.comment.user.login} only collaborators with write access can request a review.`), 'denied';
+    const pr = await d.db.pullRequest.findFirst({ where: { number: p.issue.number, bounties: { some: { bounty: { repoId: BigInt(p.repository.id) } } } } });
+    if (!pr) return await reply('This pull request is not linked to a bounty, so there is nothing to review against.'), 'rejected:not-linked';
+    if (!d.requestReview) return 'ignored:reviews-disabled';
+    await d.requestReview(pr.id);
+    return await reply('Re-review queued. The review comment on this PR will be updated shortly.'), 'review-requested';
+  }
 
   if (cmd.kind === 'dispute') return handleDispute(d, p, inst, reply, cmd.reason);
 

@@ -64,3 +64,36 @@ describe('githubNotifier', () => {
     expect(log).toHaveLength(2);
   });
 });
+
+describe('announcePayout', () => {
+  const explorerTx = (h: string) => `https://explorer.test/tx/${h}`;
+  const d = () => ({ ...deps(), explorerTx });
+  beforeEach(async () => {
+    await db.$executeRawUnsafe('TRUNCATE "AuditLog","PullRequestBounty","PullRequest" CASCADE');
+    await db.pullRequest.create({ data: { id: 5n, number: 3, authorGithubId: 9n, authorLogin: 'contrib', headSha: 'a', state: 'merged' } });
+    await db.pullRequestBounty.create({ data: { prId: 5n, bountyId: 1n } });
+    await db.payout.create({ data: { bountyId: 1n, prNumber: 3, winnerGithubId: 9n, winnerAddress: 'GWINNERADDRESS1234567890', status: 'CONFIRMED', idempotencyKey: 'release:1' } });
+  });
+  const release = () => db.bounty.update({ where: { id: 1n }, data: { status: 'RELEASED', closeTx: 'abcdef1234567890', winnerAddress: 'GWINNERADDRESS1234567890' } });
+
+  it('comments the net amount (after the 3% fee) on the PR, with a tx link, exactly once', async () => {
+    const { announcePayout } = await import('../src/github/sync.js');
+    await release();
+    expect(await announcePayout(d(), 1n)).toBe('announced');
+    expect(await announcePayout(d(), 1n)).toBe('skipped');
+    expect(log).toEqual(['post 9 o/r#3 :: **Paid 48.50 USDC to @contrib.** [Transaction abcdef12…](https://explorer.test/tx/abcdef1234567890)']);
+  });
+  it('names the address when no payout record matches (e.g. the maintainer released to someone else)', async () => {
+    const { announcePayout } = await import('../src/github/sync.js');
+    await db.payout.deleteMany();
+    await release();
+    expect(await announcePayout(d(), 1n)).toBe('announced');
+    expect(log[0]).toContain('o/r#7');
+    expect(log[0]).toContain('GWINNE…7890');
+  });
+  it('does nothing for a bounty that is not released', async () => {
+    const { announcePayout } = await import('../src/github/sync.js');
+    expect(await announcePayout(d(), 1n)).toBe('skipped');
+    expect(log).toEqual([]);
+  });
+});
