@@ -58,3 +58,15 @@ describe('config', () => {
     expect(() => loadConfig({ ...base, RELAYER_SECRET: 'nope' })).toThrow();
   });
 });
+
+describe('GitHub App config', () => {
+  const base = { DATABASE_URL: 'x', BOUNTY_CONTRACT_ID: 'CCEKBPYCWKNTXIQLXJHVAF7RYGUZZ6MITA7VVJBOK5BHXUO44ELZ4F4V', SESSION_SECRET: 's'.repeat(32), CSRF_SECRET: 'c'.repeat(32), GITHUB_WEBHOOK_SECRET: 'hooksecret' };
+  const app = { GITHUB_APP_ID: '123', GITHUB_APP_SLUG: 'x', GITHUB_APP_PRIVATE_KEY: '-----BEGIN RSA PRIVATE KEY-----\nabc\n-----END RSA PRIVATE KEY-----', GITHUB_CLIENT_ID: 'Iv1.x', GITHUB_CLIENT_SECRET: 'sec' };
+  it('is all-or-none and checks the shapes', () => {
+    expect(loadConfig({ ...base, ...app }).GITHUB_APP_ID).toBe('123');
+    expect(loadConfig(base).GITHUB_APP_ID).toBeUndefined();
+    expect(() => loadConfig({ ...base, GITHUB_APP_ID: '123' })).toThrow(/all five/);
+    expect(() => loadConfig({ ...base, ...app, GITHUB_APP_ID: 'abc' })).toThrow();
+    expect(() => loadConfig({ ...base, ...app, GITHUB_APP_PRIVATE_KEY: 'not a key' })).toThrow();
+  });
+});

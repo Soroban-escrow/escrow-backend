@@ -1,10 +1,11 @@
-import { loadConfig } from './config.js';
+import { loadConfig, loadDotEnv } from './config.js';
 import { createDb } from './db.js';
 import { createChain } from './chain/client.js';
 import { webhookProducer } from './worker/queue.js';
 import { healthReport } from './ops/health.js';
 import { buildServer, type DeliveryStore } from './server.js';
 
+loadDotEnv();
 const cfg = loadConfig();
 const db = createDb(cfg.DATABASE_URL);
 

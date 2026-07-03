@@ -1,4 +1,4 @@
-import { loadConfig } from '../config.js';
+import { loadConfig, loadDotEnv } from '../config.js';
 import { createChain } from '../chain/client.js';
 import { createDb } from '../db.js';
 import { run as runIndexer } from '../indexer/indexer.js';
@@ -10,6 +10,7 @@ import type { GithubPort } from '../github/commands.js';
 import { dispatchWebhook } from './dispatch.js';
 import { webhookWorker } from './queue.js';
 
+loadDotEnv();
 const cfg = loadConfig();
 const db = createDb(cfg.DATABASE_URL);
 const chain = createChain({ rpcUrl: cfg.STELLAR_RPC_URL, networkPassphrase: cfg.STELLAR_NETWORK_PASSPHRASE, contractId: cfg.BOUNTY_CONTRACT_ID });
