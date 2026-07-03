@@ -35,4 +35,6 @@ const app = await buildServer(cfg, store, {
   ...(cfg.GITHUB_CLIENT_ID && cfg.GITHUB_CLIENT_SECRET ? { login: { db, clientId: cfg.GITHUB_CLIENT_ID, clientSecret: cfg.GITHUB_CLIENT_SECRET, callbackUrl: `${cfg.API_PUBLIC_URL}/auth/callback`, webUrl: cfg.WEB_PUBLIC_URL, secret: cfg.SESSION_SECRET, adminGithubIds: (cfg.ADMIN_GITHUB_IDS ?? '').split(',').filter(Boolean).map(BigInt) } } : {}),
   chain: { ...chain, getBounty: async (id) => ({ status: (await chain.getBounty(id)).status.tag }) },
 }, () => healthReport({ db, latestLedger: async () => (await chain.server.getLatestLedger()).sequence }));
-await app.listen({ port: cfg.PORT, host: '0.0.0.0' });
+// on Vercel the function wrapper in api/index.js hands requests to the app instead of listening
+if (!process.env.VERCEL) await app.listen({ port: cfg.PORT, host: '0.0.0.0' });
+export default app;

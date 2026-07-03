@@ -9,7 +9,8 @@
     "typecheck": "tsc -p .",
     "eval:ai": "tsx eval/run.ts",
     "worker": "tsx src/worker/main.ts",
-    "sync:installations": "tsx src/worker/sync-installations.ts"
+    "sync:installations": "tsx src/worker/sync-installations.ts",
+    "build:vercel": "npx --yes esbuild@0.27.0 src/index.ts --bundle --platform=node --format=esm --target=node22 --outfile=dist/server.mjs --external:@prisma/client --external:@prisma/adapter-pg --external:pg-native --banner:js=\"import { createRequire as __cr } from 'node:module'; const require = __cr(import.meta.url);\""
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^1.3.0",
