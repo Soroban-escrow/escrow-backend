@@ -17,7 +17,7 @@ The backend of **SkillEscrow Bounties**, written in Rust. A maintainer comments 
 |---|---|
 | **Language / runtime** | Rust 2024, tokio, axum, sqlx |
 | **Moving parts** | one binary (`escrowd`) + PostgreSQL. No Redis, no Node |
-| **Size** | ~16k lines across 9 crates, **337 tests** (all green), clippy clean with warnings denied, `cargo audit` clean, `unsafe` forbidden; the release binary is 11.7 MB |
+| **Size** | ~16k lines across 9 crates, **341 tests** (all green), clippy clean with warnings denied, `cargo audit` clean, `unsafe` forbidden; the release binary is 11.7 MB |
 | **Verified against** | the real Stellar testnet contract and the real GitHub App (see [what has been proven](#what-has-and-has-not-been-proven)) |
 | **Pairs with** | [`escrow-contracts`](https://github.com/Soroban-escrow/escrow-contracts) (the Soroban contract) and [`escrow-app`](https://github.com/Soroban-escrow/escrow-app) (the web UI) |
 
@@ -123,7 +123,7 @@ escrow-core      pure logic: amounts, fees, /bounty parser, criteria, webhook HM
 | Crate | Responsibility | Tests |
 |---|---:|---:|
 | `escrow-core` | the money rules and every parser of untrusted text | 59 |
-| `escrow-chain` | everything that speaks Stellar | 35 + 15 fake-RPC + 3 live (opt-in) |
+| `escrow-chain` | everything that speaks Stellar | 35 + 19 fake-RPC + 4 live (opt-in) |
 | `escrow-db` | schema and queries, verified on real Postgres | 27 |
 | `escrow-github` | GitHub App auth and REST | 23 |
 | `escrow-payouts` | the payout state machine | 20 |
@@ -209,7 +209,7 @@ Errors are always `{ "error": { "code", "message" } }`. Anything the contract it
 ```bash
 # Postgres is needed for the database-backed tests. Each test gets its own throwaway database.
 export DATABASE_URL=postgres://postgres:postgres@localhost:5432/postgres
-cargo test --workspace            # 337 tests; under a minute once built
+cargo test --workspace            # 341 tests; under a minute once built
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all --check
 ```
@@ -241,10 +241,10 @@ Honest accounting, because a payments system should have it.
 - The Rust client reads the contract's configuration and bounties 1 to 4 correctly, decodes all eight historical lifecycle events (`funded`, `released`, `disputed`, `resolved`), and simulates a real unsigned `fund_bounty` transaction end to end (account lookup, argument encoding, token-transfer simulation, fee and resource assembly).
 - The indexer, started on an empty database, **rebuilt bounty #4 from raw chain events** identically to the TypeScript app's database (OPEN, 5 XLM, 3% fee, relayer allowed, same funding transaction).
 - The GitHub App JWT (RS256) is accepted by real GitHub; installations and repositories sync.
-- The relayer key matches the relayer registered in the contract.
+- The relayer key matches the relayer registered in the contract, and the relayer's **whole signing path runs against the real contract**: account lookup, `release(relayer, 4, winner)` simulated by the contract, fee and resource assembly, and signing (stopping before send, so no funds move). A nonexistent bounty is rejected by the contract at simulation as `BountyNotFound`, before anything is signed.
 - The **unmodified Next.js web app** renders the live bounty from this API (home page, detail page, and the `/api` proxy).
 
-**Verified only against fakes (but with full fidelity at the protocol level):** the rest of the payout path (relayer signing and submission, wait, resubmit-after-expiry), webhook handling, sign-in, comments and cards. The signing code is checked with real ed25519 verification and real XDR round-trips; GitHub and RPC responses are faked. **A merge-to-payout run on testnet with this backend has not been done yet**; the previous TypeScript backend did one successfully (funded → released → no double pay), and the contract is the same.
+**Verified only against fakes (but with full fidelity at the protocol level):** the last step of the payout path (actually sending, waiting, resubmitting after expiry, restoring archived state), webhook handling, sign-in, comments and cards. The signing code is checked with real ed25519 verification and real XDR round-trips; GitHub and RPC responses are faked. **A merge-to-payout run on testnet with this backend has not been done yet**; the previous TypeScript backend did one successfully (funded → released → no double pay), and the contract is the same.
 
 **Not built in the authoring environment:** the Docker image (no Docker there). CI builds it on every push, and `cargo build --release` of the same binary was run locally.
 
@@ -305,7 +305,7 @@ Stated plainly, in rough order of importance before real money:
 
 1. **A merge-to-payout run on testnet with this Rust backend.** Everything up to the wire is tested and the indexer/read paths are verified live; the signing-and-submit path has only run against a fake RPC. It needs the user-side steps (a second GitHub account and funded testnet wallet).
 2. **A KMS-backed relayer signer for mainnet.** `ReleaseSigner` is the seam; the config already refuses `RELAYER_SECRET` on mainnet.
-3. **Restoring archived contract state.** If the RPC reports archived entries the API returns a clear `state_archived` error; it does not yet build the restore transaction.
+3. **Restoring archived state for user-signed transactions.** The relayer restores archived contract state itself before a release (tested against a fake RPC; it has never been needed live because the contract extends its own TTLs). For a transaction a *user* must sign, the API returns a clear `state_archived` error instead of building the restore for them.
 4. **A distributed rate limiter.** Limits are per process (deliberately: no Redis). Fine for one instance.
 5. **External audit, a staging soak, tested backup restores**, and the usual pre-mainnet list in [docs/RUNBOOK.md](docs/RUNBOOK.md).
 

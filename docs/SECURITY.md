@@ -48,6 +48,6 @@ Please do not open a public issue for a security problem. Contact the repository
 - **The rate limiter is per process.** Several API instances each enforce their own budget.
 - **Sessions last 30 days** and are revoked by logout or by deleting the row; there is no per-device session list yet.
 - **The audit log is append-only by convention** (the code never updates or deletes it), not by database permissions. Give the application role no `DELETE` on it in production if you want that enforced.
-- **Archived contract state** is reported (`state_archived`), not repaired: the restore transaction is not built.
+- **Archived contract state**: the relayer restores it itself (one `RestoreFootprint` transaction, then one retry); for user-signed transactions the API reports `state_archived` rather than building the restore.
 - **GitHub itself is trusted** for who is a collaborator with write access (it gates `/bounty`) and for who authored a PR.
 - **No external audit has been done** of this service or the contract.

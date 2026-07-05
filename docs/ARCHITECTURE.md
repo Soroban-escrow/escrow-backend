@@ -183,6 +183,7 @@ Advisory and isolated. Defence in layers: untrusted text is **fenced** (and the 
 | Database down | `/health` 503; jobs and the indexer resume when it returns. Nothing is acknowledged that was not stored. |
 | Malformed tracked contract event | The page is rolled back and the indexer stops advancing, loudly, rather than indexing something wrong. |
 | Lost database | Re-index (`escrowd reindex`) restores bounty state; restore a backup for GitHub bookkeeping (see the runbook). |
+| Contract state archived (TTL lapsed) | The relayer sees a restore preamble in its simulation, sends a `RestoreFootprint` transaction, waits, and retries once. For a transaction a user must sign, the API answers `state_archived`. |
 | Webhook redelivered | Recognised by delivery id; acknowledged, not processed twice. |
 | Two merges for one bounty | One payout row (unique key); the second PR is told so. |
 
@@ -190,7 +191,7 @@ Advisory and isolated. Defence in layers: untrusted text is **fenced** (and the 
 
 - **Postgres instead of Redis for the queue.** One service fewer to run, host and back up; atomicity with the data (a job is enqueued in the same transaction as its cause); and the volume here (webhooks, card refreshes, reviews) is tiny. The trade-off is that Postgres is the only moving dependency and a very high job rate would eventually want a dedicated broker. That is not this workload.
 - **Runtime-checked SQL (no build-time database).** The build needs no database or offline query cache, and every query is exercised by a test against real Postgres. The cost is that a typo is caught by tests, not the compiler.
-- **Traits at every seam** (`ChainReader`, `EventSource`, `TxBuilder`, `ReleaseSigner`, `GithubApi`, `ModelPort`, `Notifier`). Production wires real implementations; tests wire in-memory ones, which is why 337 tests need no network. It is also how a KMS signer will slot in.
+- **Traits at every seam** (`ChainReader`, `EventSource`, `TxBuilder`, `ReleaseSigner`, `GithubApi`, `ModelPort`, `Notifier`). Production wires real implementations; tests wire in-memory ones, which is why 341 tests need no network. It is also how a KMS signer will slot in.
 - **Crate boundaries as architecture.** The cheapest way to guarantee "the AI cannot affect payouts" is for it to be impossible to link, and for a test to say so.
 - **A hand-written Soroban RPC client over `stellar-xdr`** rather than a large SDK: a few JSON-RPC methods, XDR types from the official crate, and full control of what we sign and submit. The only key the process ever holds signs one kind of transaction.
 - **The same HTTP contract as the TypeScript API**, so the web app, the contract and the docs did not have to change.

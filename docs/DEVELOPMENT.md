@@ -34,7 +34,13 @@ GITHUB_CLIENT_ID= GITHUB_CLIENT_SECRET= RELAYER_SECRET= cargo run -- reindex --f
 ```bash
 LIVE_ACCOUNT=G… LIVE_TOKEN=C… cargo test -p escrow-chain --test live_testnet -- --ignored --nocapture
 ```
-They read the real contract's config and bounties, decode every real event in the RPC's retention window, and simulate (never sign or send) a real `fund_bounty`. `LIVE_ACCOUNT` must be a funded testnet account.
+They read the real contract's config and bounties, decode every real event in the RPC's retention window, and simulate (never send) a real `fund_bounty`. `LIVE_ACCOUNT` must be a funded testnet account.
+
+A fourth live test runs the relayer's whole preparation path (simulate `release` against the real contract, assemble, sign) and **stops before sending**, so no funds move:
+```bash
+RELAYER_SECRET=S… LIVE_BOUNTY=4 LIVE_WINNER=G… cargo test -p escrow-chain --test live_testnet -- --ignored --nocapture relayer
+```
+`LIVE_WINNER` must be an existing funded account that is not the bounty's maintainer; the bounty must be open and funded with relayer permission.
 
 ## Layout and where things go
 
