@@ -1,0 +1,622 @@
+openapi: 3.1.0
+info:
+  title: SkillEscrow Bounties API
+  version: 0.1.0
+  summary: Paid GitHub issues, settled in USDC/XLM on Stellar. Merging the pull request pays the contributor from escrow.
+  description: |
+    The HTTP API of the Rust backend (`escrowd`). It is intentionally thin: it authenticates, validates, reads the
+    database, asks the chain to **prepare** transactions for a user's wallet to sign, relays signed ones, and queues
+    GitHub webhooks. It never changes a bounty's status (the indexer does, from chain events) and never holds a user's key.
+
+    **Conventions**
+    - JSON everywhere. 64-bit ids (`id`, `repoId`, `githubId`, ...) are **strings**; amounts are **strings** of base units
+      (7 decimals: `"50000000"` = 5 tokens).
+    - Errors are always `{ "error": { "code": "...", "message": "..." } }`. `code` is stable; `message` is for people.
+    - Sessions are an `HttpOnly` cookie (`se_session`). Every state-changing request also needs the CSRF token from
+      `GET /auth/me` in the `X-CSRF-Token` header.
+    - Cursor pagination: pass the previous page's `nextCursor`.
+  license:
+    name: See repository
+servers:
+  - url: http://localhost:3001
+    description: Local development
+tags:
+  - { name: Public, description: No sign-in needed }
+  - { name: Auth, description: GitHub sign-in and the session }
+  - { name: Wallet, description: Linking a Stellar address to a GitHub account }
+  - { name: Me, description: The signed-in user's own data }
+  - { name: Funding, description: Funding links and transaction relay }
+  - { name: Admin, description: Arbiter tools (admins only) }
+  - { name: Webhooks, description: GitHub App deliveries }
+  - { name: Ops, description: Health and metrics }
+security: []
+paths:
+  /health:
+    get:
+      tags: [Ops]
+      summary: Liveness and dependency health
+      description: 503 when the database or Stellar RPC is unreachable, or the indexer is more than 60 ledgers (about 5 minutes) behind. Never rate limited.
+      responses:
+        '200': { description: Healthy, content: { application/json: { schema: { $ref: '#/components/schemas/Health' } } } }
+        '503': { description: Unhealthy, content: { application/json: { schema: { $ref: '#/components/schemas/Health' } } } }
+  /metrics:
+    get:
+      tags: [Ops]
+      summary: Prometheus metrics
+      description: Counters for what this process handled plus gauges read from the database. Requires `Authorization: Bearer <METRICS_TOKEN>` when that variable is set.
+      responses:
+        '200': { description: Prometheus text exposition, content: { text/plain: { schema: { type: string } } } }
+        '401': { $ref: '#/components/responses/Error' }
+  /config:
+    get:
+      tags: [Public]
+      summary: Contract parameters
+      description: The fee, refund grace, allowed durations and the arbiter address, read live from the contract. Cached for 30 seconds.
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/Config' } } } }
+        '503': { $ref: '#/components/responses/Error' }
+  /stats:
+    get:
+      tags: [Public]
+      summary: Headline numbers
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/Stats' } } } }
+  /bounties:
+    get:
+      tags: [Public]
+      summary: List bounties
+      parameters:
+        - { name: status, in: query, schema: { $ref: '#/components/schemas/BountyStatus', default: OPEN } }
+        - { name: token, in: query, description: Token contract id, schema: { type: string } }
+        - { name: minAmount, in: query, description: Minimum amount in base units, schema: { type: string, pattern: '^\d{1,39}$' } }
+        - { name: q, in: query, description: Case-insensitive match on issue title or repository, schema: { type: string, maxLength: 100 } }
+        - { name: sort, in: query, schema: { type: string, enum: [newest, highest, ending], default: newest } }
+        - { name: cursor, in: query, schema: { type: string, pattern: '^\d{1,18}$' } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 50, default: 20 } }
+      responses:
+        '200':
+          description: A page of bounties
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, nextCursor]
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/BountyListItem' } }
+                  nextCursor: { type: [string, 'null'] }
+        '400': { $ref: '#/components/responses/Error' }
+  /bounties/{id}:
+    get:
+      tags: [Public]
+      summary: One bounty with its pull requests, their latest AI review, and payouts
+      parameters: [{ $ref: '#/components/parameters/BountyId' }]
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/BountyDetail' } } } }
+        '404': { $ref: '#/components/responses/Error' }
+  /users/{login}:
+    get:
+      tags: [Public]
+      summary: A contributor's public record
+      description: Only confirmed payouts are shown; the transaction hash makes each one verifiable on chain.
+      parameters: [{ name: login, in: path, required: true, schema: { type: string } }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  login: { type: string }
+                  avatarUrl: { type: [string, 'null'] }
+                  paid:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        bounty: { $ref: '#/components/schemas/EarningBounty' }
+                        txHash: { type: [string, 'null'] }
+        '404': { $ref: '#/components/responses/Error' }
+  /auth/login:
+    get:
+      tags: [Auth]
+      summary: Start GitHub sign-in
+      description: Redirects to GitHub (authorization code flow with PKCE) and sets a short-lived signed `se_oauth` cookie that binds the flow to this browser. 501 until the GitHub App's OAuth credentials are configured.
+      parameters:
+        - { name: next, in: query, description: Same-site path to return to; anything else becomes `/me`., schema: { type: string } }
+      responses:
+        '303': { description: Redirect to GitHub }
+        '501': { $ref: '#/components/responses/Error' }
+  /auth/callback:
+    get:
+      tags: [Auth]
+      summary: GitHub redirects back here
+      parameters:
+        - { name: code, in: query, schema: { type: string } }
+        - { name: state, in: query, schema: { type: string } }
+      responses:
+        '303': { description: Signed in; sets `se_session` and redirects to the web app }
+        '400': { $ref: '#/components/responses/Error' }
+        '502': { $ref: '#/components/responses/Error' }
+  /auth/me:
+    get:
+      tags: [Auth]
+      summary: The signed-in user and their CSRF token
+      security: [{ sessionCookie: [] }]
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/Me' } } } }
+        '401': { $ref: '#/components/responses/Error' }
+  /auth/logout:
+    post:
+      tags: [Auth]
+      summary: End the session
+      security: [{ sessionCookie: [], csrf: [] }]
+      responses:
+        '200': { description: Signed out, content: { application/json: { schema: { $ref: '#/components/schemas/Ok' } } } }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+  /wallet/challenge:
+    post:
+      tags: [Wallet]
+      summary: Ask for a message to sign with your wallet
+      description: The message binds your GitHub account, the address, a single-use nonce and a 5-minute expiry. Sign it with `signMessage` (SEP-53).
+      security: [{ sessionCookie: [], csrf: [] }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [address], properties: { address: { type: string, description: Stellar account (G...) } } } } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  challengeId: { type: string }
+                  message: { type: string }
+        '400': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '429': { $ref: '#/components/responses/Error' }
+  /wallet/verify:
+    post:
+      tags: [Wallet]
+      summary: Prove you control the address
+      description: Verifies the signature, burns the challenge (single use) and links the wallet. A payout that was waiting for a wallet continues immediately.
+      security: [{ sessionCookie: [], csrf: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [challengeId, signature]
+              properties:
+                challengeId: { type: string }
+                signature: { type: string, description: Base64 ed25519 signature over sha256("Stellar Signed Message:\n" + message) }
+      responses:
+        '200': { description: Linked, content: { application/json: { schema: { type: object, properties: { address: { type: string } } } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '410': { $ref: '#/components/responses/Error' }
+  /wallet:
+    delete:
+      tags: [Wallet]
+      summary: Unlink your wallet
+      security: [{ sessionCookie: [], csrf: [] }]
+      responses:
+        '200': { description: Unlinked, content: { application/json: { schema: { $ref: '#/components/schemas/Ok' } } } }
+  /me/earnings:
+    get:
+      tags: [Me]
+      summary: Your payouts, newest first (any status)
+      security: [{ sessionCookie: [] }]
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Earning' } } } } }
+        '401': { $ref: '#/components/responses/Error' }
+  /me/funded:
+    get:
+      tags: [Me]
+      summary: Bounties funded from your linked wallet
+      security: [{ sessionCookie: [] }]
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Bounty' } } } } }
+        '401': { $ref: '#/components/responses/Error' }
+  /intents/{id}:
+    get:
+      tags: [Funding]
+      summary: The terms behind a funding link
+      description: The link in the bot's comment. `state` is `open`, `used` or `expired`.
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/Intent' } } } }
+        '404': { $ref: '#/components/responses/Error' }
+  /intents/{id}/build:
+    post:
+      tags: [Funding]
+      summary: Prepare the unsigned `fund_bounty` transaction
+      description: Only the GitHub user who typed `/bounty` may use the link. Returns base64 XDR, simulated and ready for the wallet to sign. The server never signs it.
+      security: [{ sessionCookie: [], csrf: [] }]
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [address, relayerAllowed]
+              properties:
+                address: { type: string, description: The funding wallet (G...) }
+                relayerAllowed: { type: boolean, description: Let the relayer release on merge. If false, you sign every release yourself. }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/Xdr' } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '410': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+  /tx/submit:
+    post:
+      tags: [Funding]
+      summary: Relay a signed transaction
+      description: Accepts only a signed, single-operation call to the escrow contract's user functions (`fund_bounty`, `release`, `refund`, `open_dispute`, `resolve`). Anything else is refused before it reaches the network.
+      security: [{ sessionCookie: [], csrf: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [xdr]
+              properties:
+                xdr: { type: string, maxLength: 20000 }
+                address: { type: string, description: If given, the transaction's source account must equal it }
+      responses:
+        '200': { description: Submitted, content: { application/json: { schema: { type: object, properties: { hash: { type: string } } } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+  /bounties/{id}/release/build:
+    post:
+      tags: [Funding]
+      summary: Prepare the maintainer's own `release` transaction
+      description: For bounties funded without relayer permission. Only when a merged PR's payout is waiting for the maintainer; the chain is re-read first.
+      security: [{ sessionCookie: [], csrf: [] }]
+      parameters: [{ $ref: '#/components/parameters/BountyId' }]
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { type: object, properties: { xdr: { type: string }, winner: { type: string } } } } } }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+  /bounties/{id}/refund/build:
+    post:
+      tags: [Funding]
+      summary: Prepare the maintainer's `refund` transaction
+      description: The contract itself enforces the deadline and grace period; a premature refund is rejected with `contract_DeadlineNotReached`.
+      security: [{ sessionCookie: [], csrf: [] }]
+      parameters: [{ $ref: '#/components/parameters/BountyId' }]
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/Xdr' } } } }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+  /admin/disputes:
+    get:
+      tags: [Admin]
+      summary: Open disputes, oldest first
+      description: '`overdue` is true once a dispute is older than 36 hours.'
+      security: [{ sessionCookie: [] }]
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/DisputeView' } } } } }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+  /admin/disputes/{id}/open-onchain:
+    post:
+      tags: [Admin]
+      summary: Prepare `open_dispute` for the arbiter's wallet
+      security: [{ sessionCookie: [], csrf: [] }]
+      parameters: [{ $ref: '#/components/parameters/DisputeId' }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [arbiterAddress], properties: { arbiterAddress: { type: string } } } } }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/Xdr' } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+  /admin/disputes/{id}/resolve/build:
+    post:
+      tags: [Admin]
+      summary: Prepare `resolve` (a split) for the arbiter's wallet
+      description: '`winnerBps` is the winner''s share in basis points (0 to 10000); a winner is required when it is above 0. At 0 the whole amount returns to the maintainer.'
+      security: [{ sessionCookie: [], csrf: [] }]
+      parameters: [{ $ref: '#/components/parameters/DisputeId' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [arbiterAddress, winnerBps]
+              properties:
+                arbiterAddress: { type: string }
+                winner: { type: string }
+                winnerBps: { type: integer, minimum: 0, maximum: 10000 }
+                note: { type: string, maxLength: 1000 }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/Xdr' } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+  /admin/disputes/{id}/reject:
+    post:
+      tags: [Admin]
+      summary: Reject a dispute that was never opened on chain
+      security: [{ sessionCookie: [], csrf: [] }]
+      parameters: [{ $ref: '#/components/parameters/DisputeId' }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [note], properties: { note: { type: string, minLength: 1, maxLength: 1000 } } } } }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/Ok' } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+  /admin/payouts:
+    get:
+      tags: [Admin]
+      summary: Payouts by status (default FAILED)
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - { name: status, in: query, schema: { $ref: '#/components/schemas/PayoutStatus' } }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Payout' } } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+  /admin/payouts/{id}/retry:
+    post:
+      tags: [Admin]
+      summary: Re-queue a FAILED payout that has no submitted transaction
+      description: A payout with a transaction hash must be verified on chain instead (`has_tx_hash`), so a retry can never pay twice.
+      security: [{ sessionCookie: [], csrf: [] }]
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses:
+        '200': { description: Re-queued, content: { application/json: { schema: { $ref: '#/components/schemas/Ok' } } } }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+  /admin/status:
+    get:
+      tags: [Admin]
+      summary: A one-glance summary of the system
+      security: [{ sessionCookie: [] }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  indexerLedger: { type: [integer, 'null'] }
+                  indexerUpdatedAt: { type: [string, 'null'], format: date-time }
+                  failedPayouts: { type: integer }
+                  waitingPayouts: { type: integer }
+                  openDisputes: { type: integer }
+                  deadJobs: { type: integer }
+                  pendingJobs: { type: integer }
+        '403': { $ref: '#/components/responses/Error' }
+  /github/webhooks:
+    post:
+      tags: [Webhooks]
+      summary: GitHub App webhook receiver
+      description: |
+        Verifies `X-Hub-Signature-256` over the **raw** body in constant time, records the delivery id (so a redelivery is
+        acknowledged but not processed twice), and queues the work. The response is immediate; handlers run in the worker.
+      parameters:
+        - { name: X-Hub-Signature-256, in: header, required: true, schema: { type: string } }
+        - { name: X-GitHub-Delivery, in: header, required: true, schema: { type: string } }
+        - { name: X-GitHub-Event, in: header, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object } } }
+      responses:
+        '202': { description: Queued, content: { application/json: { schema: { type: object, properties: { queued: { type: boolean } } } } } }
+        '200': { description: Duplicate delivery, acknowledged, content: { application/json: { schema: { type: object, properties: { duplicate: { type: boolean } } } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+components:
+  securitySchemes:
+    sessionCookie: { type: apiKey, in: cookie, name: se_session, description: HttpOnly session cookie set after GitHub sign-in }
+    csrf: { type: apiKey, in: header, name: X-CSRF-Token, description: The `csrfToken` from `GET /auth/me`, bound to the session }
+  parameters:
+    BountyId: { name: id, in: path, required: true, description: Bounty id (the contract's u64, as a string), schema: { type: string, pattern: '^\d{1,18}$' } }
+    DisputeId: { name: id, in: path, required: true, schema: { type: string, pattern: '^[a-z0-9]{10,40}$' } }
+  responses:
+    Error:
+      description: Error
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              description: |
+                Stable. Includes `bad_request`, `unauthenticated`, `forbidden`, `csrf`, `not_found`, `rate_limited`,
+                `chain_unavailable`, `state_archived`, and `contract_<Name>` for any error the escrow contract itself
+                returns (e.g. `contract_IssueAlreadyFunded`, `contract_DeadlineNotReached`).
+            message: { type: string }
+    Ok: { type: object, properties: { ok: { type: boolean } } }
+    Xdr: { type: object, properties: { xdr: { type: string, description: Unsigned, simulated transaction envelope (base64 XDR) for a wallet to sign } } }
+    BountyStatus: { type: string, enum: [OPEN, RELEASED, REFUNDED, DISPUTED, RESOLVED] }
+    PayoutStatus: { type: string, enum: [PENDING_WALLET, QUEUED, SUBMITTED, CONFIRMED, FAILED, AWAITING_MAINTAINER] }
+    Health:
+      type: object
+      properties:
+        ok: { type: boolean }
+        db: { type: boolean }
+        rpc: { type: boolean }
+        indexerLagLedgers: { type: [integer, 'null'] }
+        deadJobs: { type: [integer, 'null'] }
+    Config:
+      type: object
+      properties:
+        network: { type: string, enum: [testnet, mainnet, local] }
+        feeBps: { type: integer }
+        graceSecs: { type: integer }
+        minDurationSecs: { type: integer }
+        maxDurationSecs: { type: integer }
+        paused: { type: boolean }
+        arbiter: { type: string }
+        relayer: { type: string }
+        treasury: { type: string }
+        tokens: { type: object, properties: { USDC: { type: string }, XLM: { type: string } } }
+        explorerTxTemplate: { type: string }
+    Stats:
+      type: object
+      properties:
+        bounties: { type: object, additionalProperties: { type: integer } }
+        contributorsPaid: { type: integer }
+        openByToken:
+          type: array
+          items: { type: object, properties: { token: { type: string }, symbol: { type: string }, count: { type: integer }, amount: { type: string } } }
+    Me:
+      type: object
+      properties:
+        id: { type: string }
+        login: { type: string }
+        avatarUrl: { type: [string, 'null'] }
+        wallet: { type: [string, 'null'] }
+        isAdmin: { type: boolean }
+        csrfToken: { type: string }
+    Bounty:
+      type: object
+      properties:
+        id: { type: string }
+        repoId: { type: string }
+        issueNumber: { type: integer }
+        issueTitle: { type: string }
+        issueUrl: { type: string }
+        criteria: { type: array, items: { type: string } }
+        maintainer: { type: string }
+        maintainerGithubId: { type: [string, 'null'] }
+        token: { type: string }
+        amount: { type: string }
+        feeBps: { type: integer }
+        deadline: { type: string, format: date-time }
+        relayerAllowed: { type: boolean }
+        status: { $ref: '#/components/schemas/BountyStatus' }
+        winnerAddress: { type: [string, 'null'] }
+        winnerGithubId: { type: [string, 'null'] }
+        fundTx: { type: string }
+        closeTx: { type: [string, 'null'] }
+        cardCommentId: { type: [string, 'null'] }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    BountyListItem:
+      allOf:
+        - { $ref: '#/components/schemas/Bounty' }
+        - type: object
+          properties:
+            repo: { type: object, properties: { fullName: { type: string } } }
+            _count: { type: object, properties: { prs: { type: integer } } }
+    PullRequest:
+      type: object
+      properties:
+        id: { type: string }
+        number: { type: integer }
+        authorGithubId: { type: string }
+        authorLogin: { type: string }
+        headSha: { type: string }
+        state: { type: string, enum: [open, closed, merged] }
+        mergedAt: { type: [string, 'null'], format: date-time }
+        diffHash: { type: [string, 'null'] }
+    AiReview:
+      type: object
+      description: Advisory only. It never influences a payout.
+      properties:
+        id: { type: string }
+        prId: { type: string }
+        headSha: { type: string }
+        model: { type: string }
+        verdict: { type: string, enum: [likely_meets, partially_meets, does_not_meet, needs_human] }
+        score: { type: integer, minimum: 0, maximum: 100 }
+        result: { type: object }
+        flags: { type: array, items: { type: string } }
+        createdAt: { type: string, format: date-time }
+    Payout:
+      type: object
+      properties:
+        id: { type: string }
+        bountyId: { type: string }
+        prNumber: { type: integer }
+        winnerGithubId: { type: string }
+        winnerAddress: { type: [string, 'null'] }
+        status: { $ref: '#/components/schemas/PayoutStatus' }
+        txHash: { type: [string, 'null'] }
+        attempts: { type: integer }
+        lastError: { type: [string, 'null'] }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    EarningBounty:
+      type: object
+      properties:
+        id: { type: string }
+        issueUrl: { type: string }
+        issueTitle: { type: string }
+        token: { type: string }
+        amount: { type: string }
+        feeBps: { type: integer }
+    Earning:
+      allOf:
+        - { $ref: '#/components/schemas/Payout' }
+        - type: object
+          properties:
+            bounty: { $ref: '#/components/schemas/EarningBounty' }
+    BountyDetail:
+      allOf:
+        - { $ref: '#/components/schemas/Bounty' }
+        - type: object
+          properties:
+            repo: { type: object, properties: { fullName: { type: string } } }
+            prs:
+              type: array
+              items:
+                allOf:
+                  - { $ref: '#/components/schemas/PullRequest' }
+                  - type: object
+                    properties:
+                      reviews: { type: array, items: { $ref: '#/components/schemas/AiReview' } }
+            payouts: { type: array, items: { $ref: '#/components/schemas/Payout' } }
+    Intent:
+      type: object
+      properties:
+        state: { type: string, enum: [open, used, expired] }
+        repo: { type: [string, 'null'] }
+        issueNumber: { type: integer }
+        token: { type: string }
+        amount: { type: string }
+        durationDays: { type: integer }
+        expiresAt: { type: string, format: date-time }
+        bountyId: { type: [string, 'null'] }
+    DisputeView:
+      type: object
+      properties:
+        id: { type: string }
+        bountyId: { type: string }
+        openedByGithubId: { type: string }
+        reason: { type: string }
+        status: { type: string, enum: [requested, opened_onchain, resolved, rejected] }
+        resolutionNote: { type: [string, 'null'] }
+        overdue: { type: boolean }
+        bounty: { $ref: '#/components/schemas/BountyDetail' }
+        createdAt: { type: string, format: date-time }
