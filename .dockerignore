@@ -1,0 +1,13 @@
+target/
+.git/
+.env
+.env.*
+!.env.example
+docs/
+deploy/
+node_modules/
+api/
+eval/
+prisma/
+src/
+test/

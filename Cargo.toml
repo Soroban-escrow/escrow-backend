@@ -1,0 +1,15 @@
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+publish = false
+repository = "https://github.com/Soroban-escrow/escrow-backend"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
