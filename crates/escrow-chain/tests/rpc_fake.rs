@@ -383,3 +383,100 @@ async fn an_unreachable_rpc_is_a_transient_error_that_does_not_leak_the_url() {
 fn base64_helper_is_standard() {
     assert_eq!(STANDARD.encode([0u8, 1, 2]), "AAEC");
 }
+
+#[tokio::test]
+async fn preparing_a_release_signs_but_sends_nothing() {
+    let (secret, r) = signer(9);
+    let (_, w) = signer(2);
+    let acct = account_entry(&r.address(), 50, 1_000_000_000);
+    let fake = Fake::start(move |method, _| match method {
+        "getLedgerEntries" => acct.clone(),
+        "simulateTransaction" => sim_ok(Some(&ScVal::Void)),
+        other => panic!("unexpected {other}"),
+    })
+    .await;
+    let prepared = Relayer::new(fake.chain(), &secret).unwrap().prepare_release(4, &w.address()).await.unwrap();
+    assert!(fake.calls("sendTransaction").is_empty(), "preparing must not touch the network's send");
+    let e = decode_envelope(&prepared.envelope_b64);
+    assert!(escrow_chain::keys::verify(&r.address(), &prepared.hash, e.signatures[0].signature.0.as_slice()));
+}
+
+fn restore_preamble() -> Value {
+    json!({ "transactionData": b64(&SorobanTransactionData::default()), "minResourceFee": "7000" })
+}
+
+#[tokio::test]
+async fn archived_state_is_restored_once_then_the_release_proceeds() {
+    let (secret, r) = signer(9);
+    let (_, w) = signer(2);
+    let acct = account_entry(&r.address(), 50, 1_000_000_000);
+    let sims = Arc::new(Mutex::new(0));
+    let s2 = sims.clone();
+    let fake = Fake::start(move |method, _| match method {
+        "getLedgerEntries" => acct.clone(),
+        "simulateTransaction" => {
+            let mut n = s2.lock().unwrap();
+            *n += 1;
+            if *n == 1 { json!({ "restorePreamble": restore_preamble() }) } else { sim_ok(Some(&ScVal::Void)) }
+        }
+        "sendTransaction" => json!({ "status": "PENDING", "hash": "x" }),
+        "getTransaction" => json!({ "status": "SUCCESS" }),
+        other => panic!("unexpected {other}"),
+    })
+    .await;
+    let hash = Relayer::new(fake.chain(), &secret).unwrap().submit_release(4, &w.address()).await.unwrap();
+    // exactly two sends: the restore, then the release
+    let sent = fake.calls("sendTransaction");
+    assert_eq!(sent.len(), 2);
+    let restore = decode_envelope(sent[0]["transaction"].as_str().unwrap());
+    assert!(matches!(restore.tx.operations[0].body, OperationBody::RestoreFootprint(_)), "the first transaction restores");
+    assert!(matches!(restore.tx.ext, TransactionExt::V1(_)));
+    assert_eq!(restore.tx.fee, 100 + 7000 + 1400);
+    let release = decode_envelope(sent[1]["transaction"].as_str().unwrap());
+    assert_eq!(invoked(&release).function_name.to_utf8_string_lossy(), "release");
+    assert_eq!(
+        hex::encode(
+            TransactionEnvelope::from_xdr_base64(sent[1]["transaction"].as_str().unwrap(), Limits::none())
+                .unwrap()
+                .hash(escrow_chain::tx::network_id(PASS))
+                .unwrap()
+        ),
+        hash
+    );
+    assert_eq!(*sims.lock().unwrap(), 2);
+}
+
+#[tokio::test]
+async fn state_that_stays_archived_after_a_restore_is_an_error_not_a_loop() {
+    let (secret, r) = signer(9);
+    let (_, w) = signer(2);
+    let acct = account_entry(&r.address(), 50, 1_000_000_000);
+    let fake = Fake::start(move |method, _| match method {
+        "getLedgerEntries" => acct.clone(),
+        "simulateTransaction" => json!({ "restorePreamble": restore_preamble() }),
+        "sendTransaction" => json!({ "status": "PENDING", "hash": "x" }),
+        "getTransaction" => json!({ "status": "SUCCESS" }),
+        other => panic!("unexpected {other}"),
+    })
+    .await;
+    let e = Relayer::new(fake.chain(), &secret).unwrap().submit_release(4, &w.address()).await.unwrap_err();
+    assert!(matches!(e, ChainError::Archived));
+    assert_eq!(fake.calls("sendTransaction").len(), 1, "one restore attempt, then give up");
+}
+
+#[tokio::test]
+async fn a_restore_that_fails_on_chain_stops_the_release() {
+    let (secret, r) = signer(9);
+    let (_, w) = signer(2);
+    let acct = account_entry(&r.address(), 50, 1_000_000_000);
+    let fake = Fake::start(move |method, _| match method {
+        "getLedgerEntries" => acct.clone(),
+        "simulateTransaction" => json!({ "restorePreamble": restore_preamble() }),
+        "sendTransaction" => json!({ "status": "PENDING", "hash": "x" }),
+        "getTransaction" => json!({ "status": "FAILED" }),
+        other => panic!("unexpected {other}"),
+    })
+    .await;
+    let e = Relayer::new(fake.chain(), &secret).unwrap().submit_release(4, &w.address()).await.unwrap_err();
+    assert!(matches!(e, ChainError::Rejected(_)), "{e}");
+}

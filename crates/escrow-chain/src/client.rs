@@ -70,10 +70,13 @@ impl SorobanChain {
         self.network_id
     }
 
-    pub(crate) async fn simulate(&self, tx: &Transaction) -> Result<SimulationOk, ChainError> {
+    pub(crate) async fn simulate_wire(&self, tx: &Transaction) -> Result<SimulateWire, ChainError> {
         let xdr = tx::to_b64(&tx::envelope(tx.clone()))?;
-        let wire: SimulateWire = self.rpc.call("simulateTransaction", json!({ "transaction": xdr })).await?;
-        wire.into_ok()
+        self.rpc.call("simulateTransaction", json!({ "transaction": xdr })).await
+    }
+
+    pub(crate) async fn simulate(&self, tx: &Transaction) -> Result<SimulationOk, ChainError> {
+        self.simulate_wire(tx).await?.into_ok()
     }
 
     /// Account sequence number and XLM balance (in stroops), or `Invalid` when the account does not exist.

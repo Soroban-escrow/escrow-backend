@@ -107,7 +107,32 @@ pub struct SimulationOk {
     pub result: Option<ScVal>,
 }
 
+/// What the RPC asks us to restore before a call can run: some contract state has been archived.
+pub struct RestorePreamble {
+    pub transaction_data: SorobanTransactionData,
+    pub min_resource_fee: i64,
+}
+
 impl SimulateWire {
+    /// The restore the simulation asks for, decoded, if any.
+    pub fn restore_preamble(&self) -> Result<Option<RestorePreamble>, ChainError> {
+        let Some(v) = &self.restore_preamble else { return Ok(None) };
+        let data = v
+            .get("transactionData")
+            .and_then(Value::as_str)
+            .ok_or_else(|| ChainError::Decode("restorePreamble has no transactionData".into()))?;
+        let fee = v
+            .get("minResourceFee")
+            .and_then(Value::as_str)
+            .unwrap_or("0")
+            .parse::<i64>()
+            .map_err(|_| ChainError::Decode("bad restore fee".into()))?;
+        Ok(Some(RestorePreamble {
+            transaction_data: SorobanTransactionData::from_xdr_base64(data, Limits::none())?,
+            min_resource_fee: fee,
+        }))
+    }
+
     pub fn into_ok(self) -> Result<SimulationOk, ChainError> {
         if let Some(e) = self.error {
             return Err(ChainError::Simulation(e));

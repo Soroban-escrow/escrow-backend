@@ -52,6 +52,32 @@ pub fn invoke_tx(
     })
 }
 
+/// A `RestoreFootprint` transaction: brings archived state back so the real call can be simulated and run.
+/// The fee carries the same 20% margin as [`assemble`].
+pub fn restore_tx(
+    source: [u8; 32],
+    seq: i64,
+    data: stellar_xdr::SorobanTransactionData,
+    min_resource_fee: i64,
+    max_time: u64,
+) -> Result<Transaction, ChainError> {
+    let op = Operation {
+        source_account: None,
+        body: OperationBody::RestoreFootprint(stellar_xdr::RestoreFootprintOp { ext: stellar_xdr::ExtensionPoint::V0 }),
+    };
+    let resource = min_resource_fee.max(0);
+    let bid = i64::from(BASE_FEE).saturating_add(resource).saturating_add(resource / 5);
+    Ok(Transaction {
+        source_account: MuxedAccount::Ed25519(Uint256(source)),
+        fee: u32::try_from(bid).unwrap_or(u32::MAX),
+        seq_num: SequenceNumber(seq),
+        cond: Preconditions::Time(TimeBounds { min_time: TimePoint(0), max_time: TimePoint(max_time) }),
+        memo: Memo::None,
+        operations: vec![op].try_into().map_err(|_| ChainError::Invalid("operations".into()))?,
+        ext: TransactionExt::V1(data),
+    })
+}
+
 pub fn envelope(tx: Transaction) -> TransactionEnvelope {
     TransactionEnvelope::Tx(TransactionV1Envelope { tx, signatures: VecM::default() })
 }

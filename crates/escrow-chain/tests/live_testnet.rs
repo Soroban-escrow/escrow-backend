@@ -82,3 +82,29 @@ async fn builds_a_real_unsigned_fund_transaction() {
         Err(e) => panic!("build failed: {e} (contract error: {:?})", e.contract_error()),
     }
 }
+
+/// Runs the relayer's whole preparation path against the REAL contract (account lookup, `release` simulated by
+/// the contract, fee/resource assembly, signing), then stops. NOTHING is sent: no funds move.
+///
+///   RELAYER_SECRET=S… LIVE_BOUNTY=4 LIVE_WINNER=G… cargo test -p escrow-chain --test live_testnet -- --ignored --nocapture relayer
+///
+/// `LIVE_WINNER` must be an existing, funded account that is not the bounty's maintainer; the bounty must be open and
+/// have been funded with relayer permission.
+#[tokio::test]
+#[ignore = "needs the public testnet RPC, RELAYER_SECRET, LIVE_BOUNTY and LIVE_WINNER"]
+async fn relayer_prepares_a_real_release_without_sending_it() {
+    let (Ok(secret), Ok(bounty), Ok(winner)) =
+        (std::env::var("RELAYER_SECRET"), std::env::var("LIVE_BOUNTY"), std::env::var("LIVE_WINNER"))
+    else {
+        panic!("set RELAYER_SECRET, LIVE_BOUNTY and LIVE_WINNER");
+    };
+    let relayer = escrow_chain::Relayer::new(chain(), &secret).unwrap();
+    let prepared = relayer
+        .prepare_release(bounty.parse().unwrap(), &winner)
+        .await
+        .unwrap_or_else(|e| panic!("preparing failed: {e} (contract error: {:?})", e.contract_error()));
+    println!("signed release ready: hash {} ({} chars of XDR); NOT sent", hex::encode(prepared.hash), prepared.envelope_b64.len());
+    // and a deliberately wrong one is rejected by the contract at simulation, before any signing
+    let e = relayer.prepare_release(u64::MAX - 1, &winner).await.unwrap_err();
+    assert_eq!(e.contract_error(), Some("BountyNotFound"), "{e}");
+}

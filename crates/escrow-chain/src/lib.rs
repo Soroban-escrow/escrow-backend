@@ -22,5 +22,5 @@ pub use error::ChainError;
 pub use events::{ChainEvent, RawEvent, decode_event};
 pub use keys::Signer;
 pub use ports::{ChainReader, EventSource, ReleaseSigner, TxBuilder};
-pub use relayer::Relayer;
+pub use relayer::{PreparedRelease, Relayer};
 pub use types::{ChainBounty, ContractConfig, EventsPage, FundParams, TxOutcome};

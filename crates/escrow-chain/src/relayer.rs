@@ -21,9 +21,65 @@ pub struct Relayer {
     signer: Signer,
 }
 
+/// A signed `release` transaction, ready to send. Nothing has been sent yet.
+#[derive(Debug, Clone)]
+pub struct PreparedRelease {
+    pub envelope_b64: String,
+    pub hash: [u8; 32],
+}
+
 impl Relayer {
     pub fn new(chain: SorobanChain, secret: &str) -> Result<Self, ChainError> {
         Ok(Self { chain, signer: Signer::from_secret(secret)? })
+    }
+
+    /// Builds, simulates (so a contract rejection surfaces before anything is signed), assembles and signs
+    /// the release. Sends nothing. If the contract's state has been archived it is restored first (once).
+    pub async fn prepare_release(&self, bounty_id: u64, winner: &str) -> Result<PreparedRelease, ChainError> {
+        let me = self.signer.address();
+        for attempt in 0..2 {
+            let (seq, _) = self.chain.account(&me).await?;
+            let args = vec![scval::address(&me)?, scval::u64v(bounty_id), scval::address(winner)?];
+            let t = tx::invoke_tx(
+                self.signer.public_bytes(),
+                seq + 1,
+                self.chain.contract,
+                "release",
+                args,
+                tx::now_secs() + RELAYER_TX_VALID_SECS,
+            )?;
+            let wire = self.chain.simulate_wire(&t).await?;
+            if let Some(pre) = wire.restore_preamble()? {
+                if attempt == 1 {
+                    return Err(ChainError::Archived);
+                }
+                self.restore(pre).await?;
+                continue;
+            }
+            let sim = wire.into_ok()?;
+            let (env, hash) = tx::sign(tx::assemble(t, &sim)?, self.chain.network_id(), &self.signer)?;
+            return Ok(PreparedRelease { envelope_b64: tx::to_b64(&env)?, hash });
+        }
+        Err(ChainError::Archived)
+    }
+
+    /// Restores archived state and waits for it to land. Anyone may pay to restore; the relayer does.
+    async fn restore(&self, pre: crate::rpc::RestorePreamble) -> Result<(), ChainError> {
+        let (seq, _) = self.chain.account(&self.signer.address()).await?;
+        let t = tx::restore_tx(
+            self.signer.public_bytes(),
+            seq + 1,
+            pre.transaction_data,
+            pre.min_resource_fee,
+            tx::now_secs() + RELAYER_TX_VALID_SECS,
+        )?;
+        let (env, hash) = tx::sign(t, self.chain.network_id(), &self.signer)?;
+        self.chain.send(&tx::to_b64(&env)?).await?;
+        tracing::info!(tx = %hex::encode(hash), "restoring archived contract state");
+        match self.chain.wait_for_tx(&hex::encode(hash), Duration::from_secs(60)).await? {
+            TxOutcome::Success => Ok(()),
+            _ => Err(ChainError::Rejected("restoring archived state did not succeed".into())),
+        }
     }
 }
 
@@ -34,22 +90,9 @@ impl ReleaseSigner for Relayer {
     }
 
     async fn submit_release(&self, bounty_id: u64, winner: &str) -> Result<String, ChainError> {
-        let me = self.signer.address();
-        let (seq, _) = self.chain.account(&me).await?;
-        let args = vec![scval::address(&me)?, scval::u64v(bounty_id), scval::address(winner)?];
-        let t = tx::invoke_tx(
-            self.signer.public_bytes(),
-            seq + 1,
-            self.chain.contract,
-            "release",
-            args,
-            tx::now_secs() + RELAYER_TX_VALID_SECS,
-        )?;
-        // a contract rejection (wrong status, relayer not allowed, ...) surfaces here, before anything is signed
-        let sim = self.chain.simulate(&t).await?;
-        let (env, hash) = tx::sign(tx::assemble(t, &sim)?, self.chain.network_id(), &self.signer)?;
-        self.chain.send(&tx::to_b64(&env)?).await?;
-        Ok(hex::encode(hash))
+        let prepared = self.prepare_release(bounty_id, winner).await?;
+        self.chain.send(&prepared.envelope_b64).await?;
+        Ok(hex::encode(prepared.hash))
     }
 
     async fn wait_for_tx(&self, hash: &str) -> Result<TxOutcome, ChainError> {
