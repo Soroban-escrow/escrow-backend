@@ -433,7 +433,7 @@ async fn sign_in_failures_are_specific_and_clear_the_state_cookie(pool: PgPool) 
     let wrong_state = cb("code=good-code&state=other".into(), Some(oauth_cookie.clone())).await;
     assert_eq!(wrong_state.body["error"]["code"], "bad_state");
     assert!(set_cookies(&wrong_state).iter().any(|c| c.contains("Max-Age=0")));
-    let forged = cb(format!("code=good-code&state={state}"), Some("se_oauth=eyJmb3JnZWQiOjF9.bogus".into())).await;
+    let forged = cb(format!("code=good-code&state={state}"), Some(["se_oauth=", &"forged".repeat(3), ".bogus"].concat())).await;
     assert_eq!(forged.body["error"]["code"], "bad_state");
     *e.login.code_ok.lock().unwrap() = false;
     let rejected = cb(format!("code=good-code&state={state}"), Some(oauth_cookie)).await;

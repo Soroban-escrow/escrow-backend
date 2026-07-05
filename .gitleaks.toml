@@ -1,0 +1,11 @@
+# Secret-scan configuration. The default rules stay on; only the exceptions below are allowed.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Known false positives (no real secrets)"
+paths = [
+  # The original TypeScript API's indexer test uses a PUBLIC Stellar token contract id as `token: '…'`;
+  # contract ids are on-chain public data and the key name makes the generic-api-key rule fire.
+  '''^test/indexer\.test\.ts$''',
+]
