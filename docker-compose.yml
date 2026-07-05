@@ -1,0 +1,51 @@
+# One host, three containers: Postgres, the backend (API + worker), and Caddy for automatic HTTPS.
+#   cp .env.example .env   # fill in, set POSTGRES_PASSWORD and API_DOMAIN too
+#   docker compose up -d --build
+#   docker compose exec app escrowd doctor
+services:
+  db:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: escrow
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: escrow
+    volumes:
+      - pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U escrow -d escrow"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  app:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgres://escrow:${POSTGRES_PASSWORD}@db:5432/escrow
+      PORT: "3001"
+      TRUST_PROXY: "1"        # Caddy sits in front and sets X-Forwarded-For
+    depends_on:
+      db:
+        condition: service_healthy
+    expose:
+      - "3001"
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      API_DOMAIN: ${API_DOMAIN:?set API_DOMAIN in .env (e.g. api.example.com)}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+    depends_on:
+      - app
+
+volumes:
+  pgdata:
+  caddy_data:

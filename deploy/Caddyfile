@@ -1,0 +1,12 @@
+# Automatic HTTPS (Let's Encrypt) for the API. API_DOMAIN comes from the compose environment.
+{$API_DOMAIN} {
+	encode zstd gzip
+	# GitHub webhook deliveries can be large; the API enforces its own limits.
+	reverse_proxy app:3001 {
+		header_up X-Forwarded-For {remote_host}
+	}
+	log {
+		output stdout
+		format json
+	}
+}
