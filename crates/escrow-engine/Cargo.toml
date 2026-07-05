@@ -1,0 +1,33 @@
+[package]
+name = "escrow-engine"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+async-trait = "0.1.92"
+chrono = { version = "0.4.45", features = ["serde"] }
+escrow-chain = { version = "0.1.0", path = "../escrow-chain" }
+escrow-core = { version = "0.1.0", path = "../escrow-core" }
+escrow-db = { version = "0.1.0", path = "../escrow-db" }
+escrow-github = { version = "0.1.0", path = "../escrow-github" }
+escrow-payouts = { version = "0.1.0", path = "../escrow-payouts" }
+reqwest = { version = "0.13.5", default-features = false, features = ["json", "rustls"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+sqlx = { version = "0.9.0", default-features = false, features = ["postgres"] }
+thiserror = "2.0.21"
+tokio = { version = "1.54.1", features = ["time", "sync", "macros", "rt"] }
+tokio-util = "0.7.20"
+tracing = "0.1.44"
+
+[dev-dependencies]
+axum = "0.8.9"
+base64 = "0.23.1"
+escrow-core = { path = "../escrow-core" }
+escrow-testkit = { path = "../escrow-testkit" }
+sqlx = { version = "0.9.0", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "migrate", "macros", "chrono"] }
+stellar-strkey = "1.0.0"
+stellar-xdr = { version = "30.0.0", features = ["std", "base64"] }
+tokio = { version = "1.54.1", features = ["macros", "rt-multi-thread", "time", "sync"] }
