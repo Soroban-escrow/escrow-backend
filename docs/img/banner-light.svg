@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 340" width="1200" height="340" role="img" aria-label="SkillEscrow backend, written in Rust: the chain is the source of truth">
+  <rect width="1200" height="340" fill="#f6f5f1"/>
+  <rect x="0" y="0" width="1200" height="4" fill="#2f6b00"/>
+
+  <rect x="72" y="58" width="14" height="14" rx="3" fill="#2f6b00" stroke="#14130f" stroke-width="2"/>
+  <text x="98" y="71" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="19" fill="#14130f">skillescrow / escrow-backend</text>
+
+  <text x="72" y="150" font-family="Iowan Old Style, Palatino, Georgia, serif" font-size="62" fill="#14130f">The chain is the</text>
+  <text x="72" y="214" font-family="Iowan Old Style, Palatino, Georgia, serif" font-size="62" font-style="italic" fill="#2f6b00">source of truth.</text>
+
+  <text x="72" y="250" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="18" fill="#5f5d54">A Rust backend that indexes a Soroban escrow contract,</text>
+  <text x="72" y="274" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="18" fill="#5f5d54">watches GitHub, and pays the contributor on merge.</text>
+  <text x="72" y="298" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="18" fill="#5f5d54">One binary. One Postgres. No Redis.</text>
+
+  <line x1="772" y1="120" x2="1128" y2="120" stroke="#d9d6cc" stroke-width="2"/>
+  <line x1="772" y1="120" x2="1008" y2="120" stroke="#14130f" stroke-width="2"/>
+  <circle cx="772" cy="120" r="7" fill="#14130f"/>
+  <circle cx="890" cy="120" r="7" fill="#14130f"/>
+  <circle cx="1008" cy="120" r="7" fill="#2f6b00" stroke="#14130f" stroke-width="2"/>
+  <circle cx="1128" cy="120" r="7" fill="#f6f5f1" stroke="#d9d6cc" stroke-width="2"/>
+  <g font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="13" fill="#5f5d54" text-anchor="middle">
+    <text x="772" y="152">webhook</text>
+    <text x="890" y="152">queue</text>
+    <text x="1008" y="152">relayer</text>
+    <text x="1128" y="152">on-chain</text>
+  </g>
+
+  <g font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="14" fill="#14130f">
+    <rect x="772" y="196" width="356" height="92" rx="8" fill="none" stroke="#d9d6cc" stroke-width="2"/>
+    <text x="792" y="226" fill="#5f5d54">release:&lt;bounty&gt;</text>
+    <text x="792" y="252">hash stored <tspan fill="#2f6b00">before</tspan> waiting</text>
+    <text x="792" y="274" fill="#5f5d54">one payout per bounty, ever</text>
+  </g>
+</svg>

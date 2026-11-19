@@ -1,0 +1,19 @@
+# build output
+/target/
+**/*.rs.bk
+
+# secrets and local config: never commit these
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# editors and OS
+.DS_Store
+.idea/
+.vscode/
+
+# local databases and logs
+*.log
+pgdata/
