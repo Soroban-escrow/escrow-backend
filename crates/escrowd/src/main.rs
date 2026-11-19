@@ -63,15 +63,26 @@ fn init_logging() {
     }
 }
 
-fn load_env_file() {
-    match std::env::var("ENV_FILE") {
-        Ok(f) => {
-            let _ = dotenvy::from_filename(f);
-        }
-        Err(_) => {
-            let _ = dotenvy::dotenv();
-        }
+fn load_env_file_from(explicit: Option<&str>) -> Result<()> {
+    match explicit {
+        Some(path) => dotenvy::from_filename(path)
+            .map(|_| ())
+            .with_context(|| format!("could not load ENV_FILE '{path}'")),
+        None => match dotenvy::dotenv() {
+            Ok(_) => Ok(()),
+            Err(e) if ignore_default_env_error(&e) => Ok(()),
+            Err(e) => Err(anyhow::anyhow!("could not load default .env: {e}")),
+        },
     }
+}
+
+/// Only `NotFound` is tolerated for the implicit default `.env`.
+fn ignore_default_env_error(err: &dotenvy::Error) -> bool {
+    err.not_found()
+}
+
+fn load_env_file() -> Result<()> {
+    load_env_file_from(std::env::var("ENV_FILE").ok().as_deref())
 }
 
 fn auto_migrate() -> bool {
@@ -80,7 +91,7 @@ fn auto_migrate() -> bool {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    load_env_file();
+    load_env_file()?;
     let cli = Cli::parse();
     if matches!(cli.cmd, Cmd::Healthcheck) {
         return healthcheck();
@@ -139,5 +150,46 @@ fn healthcheck() -> Result<()> {
         Ok(())
     } else {
         anyhow::bail!("unhealthy: {}", out.lines().next().unwrap_or("no response"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn explicit_env_file_missing_fails_and_names_path() {
+        let path = "/definitely/not/a/real/escrow-prod.env";
+        let err = load_env_file_from(Some(path))
+            .expect_err("a missing explicit ENV_FILE must abort startup");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains(path),
+            "error must contain the configured path, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn missing_default_env_error_is_tolerated() {
+        let err = dotenvy::Error::Io(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "no such file",
+        ));
+        assert!(
+            ignore_default_env_error(&err),
+            "NotFound on the optional default .env must stay non-fatal"
+        );
+    }
+
+    #[test]
+    fn non_notfound_default_env_error_is_fatal() {
+        let err = dotenvy::Error::Io(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "denied",
+        ));
+        assert!(
+            !ignore_default_env_error(&err),
+            "IO errors other than NotFound on the default .env must abort"
+        );
     }
 }
