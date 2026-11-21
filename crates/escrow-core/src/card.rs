@@ -68,7 +68,19 @@ pub fn render_card(c: &CardInput<'_>) -> String {
     lines.join("\n")
 }
 
+/// Prefix for all issue bounty labels.
+pub const BOUNTY_LABEL_PREFIX: &str = "bounty:";
+
+/// Checks whether a label name represents a bounty label.
+pub fn is_bounty_label(label: &str) -> bool {
+    label.starts_with(BOUNTY_LABEL_PREFIX)
+}
+
 /// The issue label, e.g. `bounty: 50 USDC`.
+///
+/// Active bounties carry this label indicating their reward amount and token.
+/// Once a bounty is closed (e.g. released or refunded), the `bounty:` label
+/// is removed from the issue so that label-based searches only return active bounties.
 pub fn label_for(amount: i128, symbol: &str) -> String {
     format!("bounty: {} {}", display(amount, 0), symbol)
 }
@@ -125,5 +137,15 @@ mod tests {
     fn label_matches_the_convention() {
         assert_eq!(label_for(500_000_000, "USDC"), "bounty: 50 USDC");
         assert_eq!(label_for(55_000_000, "XLM"), "bounty: 5.5 XLM");
+    }
+
+    #[test]
+    fn detects_bounty_labels() {
+        assert!(is_bounty_label("bounty: 50 USDC"));
+        assert!(is_bounty_label("bounty: 5.5 XLM"));
+        assert!(is_bounty_label("bounty: paid"));
+        assert!(!is_bounty_label("bug"));
+        assert!(!is_bounty_label("documentation"));
+        assert!(!is_bounty_label(""));
     }
 }

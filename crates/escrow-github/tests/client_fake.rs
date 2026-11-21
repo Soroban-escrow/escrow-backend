@@ -349,6 +349,38 @@ async fn label_names_are_validated() {
 }
 
 #[tokio::test]
+async fn removing_bounty_label_deletes_all_bounty_labels_and_preserves_others() {
+    let fake = Fake::start(|s| {
+        if s.path.ends_with("/access_tokens") {
+            return token_reply("t", Utc::now() + Duration::hours(1));
+        }
+        match (s.method.as_str(), s.path.as_str()) {
+            ("GET", p) if p.contains("/issues/3/labels") => {
+                (200, json!([{ "name": "bounty: 5 XLM" }, { "name": "bug" }, { "name": "bounty: 50 USDC" }]))
+            }
+            _ => (200, json!([])),
+        }
+    })
+    .await;
+    fake.client().remove_bounty_label(1, "acme/widgets", 3).await.unwrap();
+    let seen = fake.seen();
+    let deletes: Vec<_> = seen.iter().filter(|s| s.method == "DELETE").map(|s| s.path.as_str()).collect();
+    assert_eq!(
+        deletes,
+        ["/repos/acme/widgets/issues/3/labels/bounty%3A%205%20XLM", "/repos/acme/widgets/issues/3/labels/bounty%3A%2050%20USDC"],
+        "all bounty labels are removed; 'bug' stays"
+    );
+    assert!(!seen.iter().any(|s| s.method == "POST" && s.path.ends_with("/labels")));
+}
+
+#[tokio::test]
+async fn remove_bounty_label_validates_inputs() {
+    let fake = Fake::start(simple(json!([]))).await;
+    assert!(fake.client().remove_bounty_label(1, "bad-repo", 1).await.is_err());
+    assert!(fake.client().remove_bounty_label(1, "a/b", 0).await.is_err());
+}
+
+#[tokio::test]
 async fn pull_files_paginate_up_to_three_pages() {
     let fake = Fake::start(|s| {
         if s.path.ends_with("/access_tokens") {

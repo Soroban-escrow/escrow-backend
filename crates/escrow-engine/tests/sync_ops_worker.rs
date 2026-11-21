@@ -72,11 +72,29 @@ async fn the_card_reflects_the_new_status_and_drops_the_label_when_the_bounty_cl
     let w = world(pool.clone()).await;
     open_bounty(&w, 4, 3).await;
     refresh_bounty_card(&w.sync(), 4).await.unwrap();
+    assert_eq!(w.gh.with(|s| s.labels.clone()), [(seed::REPO.to_string(), 3, "bounty: 5 XLM".to_string())]);
+
     bounties::apply_released(&pool, 4, "e9", "txhash", "GWIN", None).await.unwrap();
     refresh_bounty_card(&w.sync(), 4).await.unwrap();
     let edited = w.gh.with(|s| s.edits.last().cloned()).unwrap().1;
     assert!(edited.contains("✅ Paid") && !edited.contains("How to claim"));
-    assert_eq!(w.gh.with(|s| s.labels.len()), 1, "no new label for a closed bounty");
+    assert!(w.gh.with(|s| s.labels.is_empty()), "bounty label is dropped once released");
+    assert!(w.gh.calls().contains(&"remove_bounty_label".to_string()));
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn the_card_reflects_the_new_status_and_drops_the_label_when_the_bounty_is_refunded(pool: PgPool) {
+    let w = world(pool.clone()).await;
+    open_bounty(&w, 4, 3).await;
+    refresh_bounty_card(&w.sync(), 4).await.unwrap();
+    assert_eq!(w.gh.with(|s| s.labels.clone()), [(seed::REPO.to_string(), 3, "bounty: 5 XLM".to_string())]);
+
+    bounties::apply_refunded(&pool, 4, "e10", "refund_tx").await.unwrap();
+    refresh_bounty_card(&w.sync(), 4).await.unwrap();
+    let edited = w.gh.with(|s| s.edits.last().cloned()).unwrap().1;
+    assert!(edited.contains("↩️ Refunded") && !edited.contains("How to claim"));
+    assert!(w.gh.with(|s| s.labels.is_empty()), "bounty label is dropped once refunded");
+    assert!(w.gh.calls().contains(&"remove_bounty_label".to_string()));
 }
 
 #[sqlx::test(migrator = "MIGRATOR")]

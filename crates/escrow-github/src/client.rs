@@ -347,6 +347,23 @@ impl GithubClient {
         }
         r.json().await.map_err(|e| GithubError::Decode(e.to_string()))
     }
+    async fn delete_bounty_labels(&self, installation: i64, repo: &str, issue: i64, keep: Option<&str>) -> Result<(), GithubError> {
+        #[derive(Deserialize)]
+        struct L {
+            name: String,
+        }
+        let existing: Vec<L> =
+            self.json(installation, reqwest::Method::GET, &format!("/repos/{repo}/issues/{issue}/labels?per_page=100"), None).await?;
+        for l in existing.iter().filter(|l| escrow_core::card::is_bounty_label(&l.name) && keep != Some(l.name.as_str())) {
+            let enc = l
+                .name
+                .bytes()
+                .map(|b| if b.is_ascii_alphanumeric() || b"-_.~".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") })
+                .collect::<String>();
+            self.call(installation, reqwest::Method::DELETE, &format!("/repos/{repo}/issues/{issue}/labels/{enc}"), None).await?;
+        }
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -396,20 +413,7 @@ impl GithubApi for GithubClient {
         if !LABEL.is_match(label) {
             return Err(GithubError::Invalid("invalid label".into()));
         }
-        #[derive(Deserialize)]
-        struct L {
-            name: String,
-        }
-        let existing: Vec<L> =
-            self.json(installation, reqwest::Method::GET, &format!("/repos/{repo}/issues/{issue}/labels?per_page=100"), None).await?;
-        for l in existing.iter().filter(|l| l.name.starts_with("bounty:") && l.name != label) {
-            let enc = l
-                .name
-                .bytes()
-                .map(|b| if b.is_ascii_alphanumeric() || b"-_.~".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") })
-                .collect::<String>();
-            self.call(installation, reqwest::Method::DELETE, &format!("/repos/{repo}/issues/{issue}/labels/{enc}"), None).await?;
-        }
+        self.delete_bounty_labels(installation, repo, issue, Some(label)).await?;
         let made = self
             .call(installation, reqwest::Method::POST, &format!("/repos/{repo}/labels"), Some(&json!({ "name": label, "color": "c9f25d" })))
             .await?;
@@ -425,6 +429,12 @@ impl GithubApi for GithubClient {
         )
         .await
         .map(|_| ())
+    }
+
+    async fn remove_bounty_label(&self, installation: i64, repo: &str, issue: i32) -> Result<(), GithubError> {
+        let repo = repo_ok(repo)?;
+        let issue = positive(issue.into(), "issue")?;
+        self.delete_bounty_labels(installation, repo, issue, None).await
     }
 
     async fn get_pull(&self, installation: i64, repo: &str, pr: i32) -> Result<Pull, GithubError> {

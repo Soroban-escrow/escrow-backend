@@ -110,6 +110,8 @@ pub async fn refresh_bounty_card(d: &SyncDeps, bounty_id: i64) -> Result<CardOut
 
     if b.status().is_active() {
         d.gh.set_bounty_label(inst, name, b.issue_number, &label_for(b.amount_i128(), &symbol)).await?;
+    } else {
+        d.gh.remove_bounty_label(inst, name, b.issue_number).await?;
     }
     Ok(outcome)
 }
