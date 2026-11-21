@@ -55,6 +55,20 @@ pub async fn config(State(s): State<AppState>) -> ApiResult<Response> {
 }
 
 pub async fn stats(State(s): State<AppState>) -> ApiResult<Response> {
+    let now = (s.now)();
+    let cache_ttl_secs = 30;
+
+    let mut cache = s.stats_cache.lock().await;
+    if let Some(cached) = cache.as_ref() {
+        if (now - cached.cached_at).num_seconds() < cache_ttl_secs {
+            return Ok((
+                [(header::CACHE_CONTROL, "public, max-age=30")],
+                Json(cached.data.clone()),
+            )
+                .into_response());
+        }
+    }
+
     let by_status: Vec<(String, i64)> =
         sqlx::query_as("SELECT status, count(*) FROM bounties GROUP BY status").fetch_all(&s.db.pool).await?;
     let open: Vec<(String, i64, String)> = sqlx::query_as(
@@ -72,9 +86,13 @@ pub async fn stats(State(s): State<AppState>) -> ApiResult<Response> {
         .into_iter()
         .map(|(t, n, amount)| json!({ "token": t, "symbol": s.cfg.tokens.symbol_for(&t), "count": n, "amount": amount }))
         .collect();
+    let data = json!({ "bounties": counts, "openByToken": open_by_token, "contributorsPaid": paid_people });
+
+    *cache = Some(crate::state::StatsCache { data: data.clone(), cached_at: now });
+
     Ok((
         [(header::CACHE_CONTROL, "public, max-age=30")],
-        Json(json!({ "bounties": counts, "openByToken": open_by_token, "contributorsPaid": paid_people })),
+        Json(data),
     )
         .into_response())
 }

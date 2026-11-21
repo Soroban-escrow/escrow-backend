@@ -236,6 +236,7 @@ impl Runtime {
             payouts: self.payout_deps(),
             limiter: Arc::new(RateLimiter::new(Duration::from_secs(60))),
             metrics: Arc::new(Metrics::default()),
+            stats_cache: Arc::new(tokio::sync::Mutex::new(None)),
             now: Utc::now,
         }
     }

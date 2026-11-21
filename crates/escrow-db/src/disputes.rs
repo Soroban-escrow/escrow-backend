@@ -1,7 +1,7 @@
 use crate::{models::Dispute, new_id};
 use sqlx::PgExecutor;
 
-const COLS: &str = "id, bounty_id, opened_by_github_id, reason, evidence, status, resolution_note, created_at, updated_at";
+const COLS: &str = "id, bounty_id, opened_by_github_id, reason, evidence, status, resolution_note, pending_note, pending_winner, pending_winner_bps, created_at, updated_at";
 
 pub async fn create<'e>(ex: impl PgExecutor<'e>, bounty_id: i64, opened_by: i64, reason: &str) -> Result<Dispute, sqlx::Error> {
     sqlx::query_as(sqlx::AssertSqlSafe(format!(
@@ -56,6 +56,45 @@ pub async fn set_note<'e>(ex: impl PgExecutor<'e>, id: &str, note: &str) -> Resu
         .execute(ex)
         .await
         .map(|_| ())
+}
+
+pub async fn set_pending_resolution<'e>(
+    ex: impl PgExecutor<'e>,
+    id: &str,
+    note: &str,
+    winner: Option<&str>,
+    winner_bps: u32,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "UPDATE disputes SET pending_note = $2, pending_winner = $3, pending_winner_bps = $4, updated_at = now() WHERE id = $1",
+    )
+    .bind(id)
+    .bind(note)
+    .bind(winner)
+    .bind(winner_bps as i32)
+    .execute(ex)
+    .await
+    .map(|_| ())
+}
+
+pub async fn promote_pending_resolution<'e>(ex: impl PgExecutor<'e>, id: &str) -> Result<bool, sqlx::Error> {
+    sqlx::query(
+        "UPDATE disputes SET resolution_note = pending_note, pending_note = NULL, pending_winner = NULL, pending_winner_bps = NULL, updated_at = now() WHERE id = $1 AND pending_note IS NOT NULL",
+    )
+    .bind(id)
+    .execute(ex)
+    .await
+    .map(|r| r.rows_affected() > 0)
+}
+
+pub async fn promote_pending_resolutions_for_bounty<'e>(ex: impl PgExecutor<'e>, bounty_id: i64) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "UPDATE disputes SET resolution_note = pending_note, pending_note = NULL, pending_winner = NULL, pending_winner_bps = NULL, updated_at = now() WHERE bounty_id = $1 AND pending_note IS NOT NULL",
+    )
+    .bind(bounty_id)
+    .execute(ex)
+    .await
+    .map(|_| ())
 }
 
 /// The contract emitted `disputed`: requested disputes on that bounty are now open on chain.

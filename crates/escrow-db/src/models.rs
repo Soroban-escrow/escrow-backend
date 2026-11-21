@@ -189,6 +189,12 @@ pub struct Dispute {
     pub evidence: serde_json::Value,
     pub status: String,
     pub resolution_note: Option<String>,
+    #[serde(skip)]
+    pub pending_note: Option<String>,
+    #[serde(skip)]
+    pub pending_winner: Option<String>,
+    #[serde(skip)]
+    pub pending_winner_bps: Option<i32>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }

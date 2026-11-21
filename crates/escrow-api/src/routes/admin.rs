@@ -135,7 +135,7 @@ pub async fn resolve_build(
     }
     let winner = if b.winner_bps > 0 { b.winner.as_deref() } else { None };
     let xdr = s.txb.build_resolve(&b.arbiter_address, u64::try_from(d.bounty_id).unwrap_or(0), winner, b.winner_bps).await?;
-    disputes::set_note(&s.db.pool, &d.id, &b.note).await?;
+    disputes::set_pending_resolution(&s.db.pool, &d.id, &b.note, winner, b.winner_bps).await?;
     audit_log(&s, &a, "dispute.resolve.build", format!("dispute:{}", d.id), json!({ "winner": b.winner, "bps": b.winner_bps })).await?;
     Ok(Json(json!({ "xdr": xdr })))
 }
