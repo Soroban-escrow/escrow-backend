@@ -45,6 +45,7 @@ pub struct CommandDeps {
 const WRITERS: [&str; 3] = ["admin", "maintain", "write"];
 const HELP: &str = "**SkillEscrow commands**\n\
 - `/bounty <amount> [USDC|XLM] [<days>d]` fund this issue, e.g. `/bounty 50 USDC 14d` (needs write access)\n\
+- `/bounty review` request an AI review of a PR linked to a bounty (PRs only, needs write access)\n\
 - `/bounty dispute <reason>` flag a problem on a bountied issue\n\
 - `/bounty help`";
 
