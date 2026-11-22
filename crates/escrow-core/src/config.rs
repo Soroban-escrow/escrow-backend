@@ -221,7 +221,7 @@ impl Config {
         };
         let contract_id = r.required("BOUNTY_CONTRACT_ID");
         if !contract_id.is_empty() && !strkey_c.is_match(&contract_id) {
-            r.errors.push("BOUNTY_CONTRACT_ID: must be a Soroban contract id (C…, 56 characters)".into());
+            r.errors.push("BOUNTY_CONTRACT_ID: must be a Soroban contract id (Câ€¦, 56 characters)".into());
         }
 
         let app_id = r.matches("GITHUB_APP_ID", &digits, "must be numeric");
@@ -250,7 +250,7 @@ impl Config {
             }
         };
 
-        let relayer_secret = r.matches("RELAYER_SECRET", &strkey_s, "must be a Stellar secret key (S…, 56 characters)");
+        let relayer_secret = r.matches("RELAYER_SECRET", &strkey_s, "must be a Stellar secret key (Sâ€¦, 56 characters)");
         if network == Network::Mainnet && relayer_secret.is_some() {
             r.errors.push("RELAYER_SECRET: must not be used on mainnet; use a KMS-backed signer".into());
         }
@@ -260,7 +260,7 @@ impl Config {
             .map(|v| v.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect())
             .unwrap_or_default();
         if relayer_channel_secrets.iter().any(|s| !strkey_s.is_match(s)) {
-            r.errors.push("RELAYER_CHANNEL_SECRETS: every entry must be a Stellar secret key (S…, 56 characters)".into());
+            r.errors.push("RELAYER_CHANNEL_SECRETS: every entry must be a Stellar secret key (Sâ€¦, 56 characters)".into());
         }
         if !relayer_channel_secrets.is_empty() && (relayer_secret.is_none() || network == Network::Mainnet) {
             r.errors.push("RELAYER_CHANNEL_SECRETS: needs RELAYER_SECRET, and is not supported on mainnet yet".into());
@@ -346,6 +346,17 @@ impl Config {
             r.errors.push("AI_PRICE_INPUT_PER_MTOK and AI_PRICE_OUTPUT_PER_MTOK: must be positive".into());
         }
 
+        let api_public_url = r.url("API_PUBLIC_URL", Some("http://localhost:3001"));
+        let web_public_url = r.url("WEB_PUBLIC_URL", Some("http://localhost:3000"));
+        if network == Network::Mainnet {
+            if !api_public_url.starts_with("https://") {
+                r.errors.push("API_PUBLIC_URL: must be an https URL on mainnet".into());
+            }
+            if !web_public_url.starts_with("https://") {
+                r.errors.push("WEB_PUBLIC_URL: must be an https URL on mainnet".into());
+            }
+        }
+
         let cfg = Config {
             log_level: r.string("LOG_LEVEL", "info"),
             port: r.number("PORT", 3001u16),
@@ -354,8 +365,8 @@ impl Config {
             rpc_url: r.url("STELLAR_RPC_URL", default_rpc),
             network_passphrase: r.string("STELLAR_NETWORK_PASSPHRASE", default_pass),
             contract_id,
-            api_public_url: r.url("API_PUBLIC_URL", Some("http://localhost:3001")),
-            web_public_url: r.url("WEB_PUBLIC_URL", Some("http://localhost:3000")),
+            api_public_url,
+            web_public_url,
             session_secret: r.secret_min("SESSION_SECRET", 32),
             csrf_secret: r.secret_min("CSRF_SECRET", 32),
             webhook_secret: r.secret_min("GITHUB_WEBHOOK_SECRET", 8),
@@ -410,7 +421,7 @@ impl Config {
         } else if !self.token_xlm.is_empty() && token == self.token_xlm {
             "XLM".into()
         } else {
-            format!("{}…", &token[..token.len().min(4)])
+            format!("{}â€¦", &token[..token.len().min(4)])
         }
     }
 
@@ -543,6 +554,52 @@ mod tests {
     }
 
     #[test]
+    fn mainnet_requires_https_public_urls() {
+        let valid_mainnet = with(&[
+            ("STELLAR_NETWORK", "mainnet"),
+            ("STELLAR_RPC_URL", "https://mainnet.sorobanrpc.com"),
+            ("API_PUBLIC_URL", "https://api.skillescrow.io"),
+            ("WEB_PUBLIC_URL", "https://skillescrow.io"),
+        ]);
+        assert!(Config::from_map(&valid_mainnet).is_ok());
+
+        let http_api = with(&[
+            ("STELLAR_NETWORK", "mainnet"),
+            ("STELLAR_RPC_URL", "https://mainnet.sorobanrpc.com"),
+            ("API_PUBLIC_URL", "http://api.skillescrow.io"),
+            ("WEB_PUBLIC_URL", "https://skillescrow.io"),
+        ]);
+        let err = Config::from_map(&http_api).unwrap_err().to_string();
+        assert!(err.contains("API_PUBLIC_URL"));
+
+        let http_web = with(&[
+            ("STELLAR_NETWORK", "mainnet"),
+            ("STELLAR_RPC_URL", "https://mainnet.sorobanrpc.com"),
+            ("API_PUBLIC_URL", "https://api.skillescrow.io"),
+            ("WEB_PUBLIC_URL", "http://skillescrow.io"),
+        ]);
+        let err = Config::from_map(&http_web).unwrap_err().to_string();
+        assert!(err.contains("WEB_PUBLIC_URL"));
+    }
+
+    #[test]
+    fn testnet_and_local_allow_http_public_urls() {
+        let testnet = with(&[
+            ("STELLAR_NETWORK", "testnet"),
+            ("API_PUBLIC_URL", "http://localhost:3001"),
+            ("WEB_PUBLIC_URL", "http://localhost:3000"),
+        ]);
+        assert!(Config::from_map(&testnet).is_ok());
+
+        let local = with(&[
+            ("STELLAR_NETWORK", "local"),
+            ("API_PUBLIC_URL", "http://localhost:3001"),
+            ("WEB_PUBLIC_URL", "http://localhost:3000"),
+        ]);
+        assert!(Config::from_map(&local).is_ok());
+    }
+
+    #[test]
     fn helpers() {
         let c = Config::from_map(&with(&[
             ("TOKEN_XLM_CONTRACT_ID", "CXLMXLMX"),
@@ -551,7 +608,7 @@ mod tests {
         ]))
         .unwrap();
         assert_eq!(c.symbol_for("CXLMXLMX"), "XLM");
-        assert_eq!(c.symbol_for("CABCDEF"), "CABC…");
+        assert_eq!(c.symbol_for("CABCDEF"), "CABCâ€¦");
         assert!(c.is_admin(9) && !c.is_admin(8));
         assert!(c.secure_cookies());
         assert_eq!(c.api_public_url, "https://api.example");
