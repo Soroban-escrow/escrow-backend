@@ -182,6 +182,18 @@ impl<'a> Reader<'a> {
         }
         v.trim_end_matches('/').to_string()
     }
+    fn optional_url(&mut self, k: &str, require_https: bool) -> Option<String> {
+        let v = self.raw(k)?;
+        if !(v.starts_with("http://") || v.starts_with("https://")) {
+            self.errors.push(format!("{k}: must be an http(s) URL"));
+            return None;
+        }
+        if require_https && !v.starts_with("https://") {
+            self.errors.push(format!("{k}: must be an https URL outside local"));
+            return None;
+        }
+        Some(v.to_string())
+    }
     fn secret_min(&mut self, k: &str, min: usize) -> String {
         let v = self.required(k);
         if !v.is_empty() && v.len() < min {
@@ -221,7 +233,7 @@ impl Config {
         };
         let contract_id = r.required("BOUNTY_CONTRACT_ID");
         if !contract_id.is_empty() && !strkey_c.is_match(&contract_id) {
-            r.errors.push("BOUNTY_CONTRACT_ID: must be a Soroban contract id (C…, 56 characters)".into());
+            r.errors.push("BOUNTY_CONTRACT_ID: must be a Soroban contract id (Câ€¦, 56 characters)".into());
         }
 
         let app_id = r.matches("GITHUB_APP_ID", &digits, "must be numeric");
@@ -250,7 +262,7 @@ impl Config {
             }
         };
 
-        let relayer_secret = r.matches("RELAYER_SECRET", &strkey_s, "must be a Stellar secret key (S…, 56 characters)");
+        let relayer_secret = r.matches("RELAYER_SECRET", &strkey_s, "must be a Stellar secret key (Sâ€¦, 56 characters)");
         if network == Network::Mainnet && relayer_secret.is_some() {
             r.errors.push("RELAYER_SECRET: must not be used on mainnet; use a KMS-backed signer".into());
         }
@@ -260,7 +272,7 @@ impl Config {
             .map(|v| v.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect())
             .unwrap_or_default();
         if relayer_channel_secrets.iter().any(|s| !strkey_s.is_match(s)) {
-            r.errors.push("RELAYER_CHANNEL_SECRETS: every entry must be a Stellar secret key (S…, 56 characters)".into());
+            r.errors.push("RELAYER_CHANNEL_SECRETS: every entry must be a Stellar secret key (Sâ€¦, 56 characters)".into());
         }
         if !relayer_channel_secrets.is_empty() && (relayer_secret.is_none() || network == Network::Mainnet) {
             r.errors.push("RELAYER_CHANNEL_SECRETS: needs RELAYER_SECRET, and is not supported on mainnet yet".into());
@@ -375,7 +387,7 @@ impl Config {
             relayer_secret,
             relayer_channel_secrets,
             relayer_min_xlm_alert: r.number("RELAYER_MIN_XLM_ALERT", 50.0f64),
-            alert_webhook_url: r.optional("ALERT_WEBHOOK_URL"),
+            alert_webhook_url: r.optional_url("ALERT_WEBHOOK_URL", network != Network::Local),
             token_usdc: r.string("TOKEN_USDC_CONTRACT_ID", ""),
             token_xlm: r.string("TOKEN_XLM_CONTRACT_ID", ""),
             token_min,
@@ -410,7 +422,7 @@ impl Config {
         } else if !self.token_xlm.is_empty() && token == self.token_xlm {
             "XLM".into()
         } else {
-            format!("{}…", &token[..token.len().min(4)])
+            format!("{}â€¦", &token[..token.len().min(4)])
         }
     }
 
@@ -527,7 +539,9 @@ mod tests {
         assert!(Config::from_map(&with(&[("SESSION_SECRET", "short")])).is_err());
         assert!(Config::from_map(&with(&[("PORT", "abc")])).is_err());
         assert!(Config::from_map(&with(&[("STELLAR_RPC_URL", "ftp://x")])).is_err());
-        assert!(Config::from_map(&with(&[("STELLAR_NETWORK", "devnet")])).is_err());
+                assert!(Config::from_map(&with(&[("STELLAR_NETWORK", "devnet")])).is_err());
+        assert!(Config::from_map(&with(&[("ALERT_WEBHOOK_URL", "not-a-url")])).is_err());
+        assert!(Config::from_map(&with(&[("ALERT_WEBHOOK_URL", "http://example.com/alerts")])).is_err());
         assert!(Config::from_map(&with(&[("ADMIN_GITHUB_IDS", "1,x")])).is_err());
         assert!(Config::from_map(&with(&[("TOKEN_MIN_AMOUNT", "10"), ("TOKEN_MAX_AMOUNT", "5")])).is_err());
         assert!(Config::from_map(&with(&[("AI_TIMEOUT_SECS", "0")])).is_err());
@@ -543,6 +557,29 @@ mod tests {
     }
 
     #[test]
+    fn alert_webhook_url_validation() {
+        let cfg = Config::from_map(&with(&[("ALERT_WEBHOOK_URL", "https://example.com/alerts")])).unwrap();
+        assert_eq!(cfg.alert_webhook_url.as_deref(), Some("https://example.com/alerts"));
+
+        let local_cfg = Config::from_map(&with(&[
+            ("STELLAR_NETWORK", "local"),
+            ("ALERT_WEBHOOK_URL", "http://localhost:9000/alerts"),
+        ]))
+        .unwrap();
+        assert_eq!(local_cfg.alert_webhook_url.as_deref(), Some("http://localhost:9000/alerts"));
+
+        let err = Config::from_map(&with(&[("ALERT_WEBHOOK_URL", "http://example.com/alerts")]))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("ALERT_WEBHOOK_URL"));
+
+        let err = Config::from_map(&with(&[("ALERT_WEBHOOK_URL", "ftp://example.com/alerts")]))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("ALERT_WEBHOOK_URL"));
+    }
+
+    #[test]
     fn helpers() {
         let c = Config::from_map(&with(&[
             ("TOKEN_XLM_CONTRACT_ID", "CXLMXLMX"),
@@ -551,7 +588,7 @@ mod tests {
         ]))
         .unwrap();
         assert_eq!(c.symbol_for("CXLMXLMX"), "XLM");
-        assert_eq!(c.symbol_for("CABCDEF"), "CABC…");
+        assert_eq!(c.symbol_for("CABCDEF"), "CABCâ€¦");
         assert!(c.is_admin(9) && !c.is_admin(8));
         assert!(c.secure_cookies());
         assert_eq!(c.api_public_url, "https://api.example");
