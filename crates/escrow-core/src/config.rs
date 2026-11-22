@@ -221,7 +221,7 @@ impl Config {
         };
         let contract_id = r.required("BOUNTY_CONTRACT_ID");
         if !contract_id.is_empty() && !strkey_c.is_match(&contract_id) {
-            r.errors.push("BOUNTY_CONTRACT_ID: must be a Soroban contract id (C…, 56 characters)".into());
+            r.errors.push("BOUNTY_CONTRACT_ID: must be a Soroban contract id (CÃ¢â‚¬Â¦, 56 characters)".into());
         }
 
         let app_id = r.matches("GITHUB_APP_ID", &digits, "must be numeric");
@@ -250,7 +250,7 @@ impl Config {
             }
         };
 
-        let relayer_secret = r.matches("RELAYER_SECRET", &strkey_s, "must be a Stellar secret key (S…, 56 characters)");
+        let relayer_secret = r.matches("RELAYER_SECRET", &strkey_s, "must be a Stellar secret key (SÃ¢â‚¬Â¦, 56 characters)");
         if network == Network::Mainnet && relayer_secret.is_some() {
             r.errors.push("RELAYER_SECRET: must not be used on mainnet; use a KMS-backed signer".into());
         }
@@ -260,7 +260,7 @@ impl Config {
             .map(|v| v.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect())
             .unwrap_or_default();
         if relayer_channel_secrets.iter().any(|s| !strkey_s.is_match(s)) {
-            r.errors.push("RELAYER_CHANNEL_SECRETS: every entry must be a Stellar secret key (S…, 56 characters)".into());
+            r.errors.push("RELAYER_CHANNEL_SECRETS: every entry must be a Stellar secret key (SÃ¢â‚¬Â¦, 56 characters)".into());
         }
         if !relayer_channel_secrets.is_empty() && (relayer_secret.is_none() || network == Network::Mainnet) {
             r.errors.push("RELAYER_CHANNEL_SECRETS: needs RELAYER_SECRET, and is not supported on mainnet yet".into());
@@ -346,6 +346,17 @@ impl Config {
             r.errors.push("AI_PRICE_INPUT_PER_MTOK and AI_PRICE_OUTPUT_PER_MTOK: must be positive".into());
         }
 
+        let indexer_start_ledger = match r.raw("INDEXER_START_LEDGER") {
+            Some(v) => match v.parse::<u32>() {
+                Ok(n) => Some(n),
+                Err(_) => {
+                    r.errors.push(format!("INDEXER_START_LEDGER: `{v}` must be a numeric ledger sequence number"));
+                    None
+                }
+            },
+            None => None,
+        };
+
         let cfg = Config {
             log_level: r.string("LOG_LEVEL", "info"),
             port: r.number("PORT", 3001u16),
@@ -387,7 +398,7 @@ impl Config {
             review_debounce_secs: r.number("REVIEW_DEBOUNCE_SECS", 300u64),
             trust_proxy: matches!(r.raw("TRUST_PROXY"), Some("1" | "true")),
             metrics_token: r.optional("METRICS_TOKEN"),
-            indexer_start_ledger: r.raw("INDEXER_START_LEDGER").and_then(|v| v.parse().ok()),
+            indexer_start_ledger,
             db_max_connections: r.number("DB_MAX_CONNECTIONS", 10u32),
             worker_concurrency: r.number("WORKER_CONCURRENCY", 4usize),
             shared_rate_limits,
@@ -410,7 +421,7 @@ impl Config {
         } else if !self.token_xlm.is_empty() && token == self.token_xlm {
             "XLM".into()
         } else {
-            format!("{}…", &token[..token.len().min(4)])
+            format!("{}Ã¢â‚¬Â¦", &token[..token.len().min(4)])
         }
     }
 
@@ -527,7 +538,8 @@ mod tests {
         assert!(Config::from_map(&with(&[("SESSION_SECRET", "short")])).is_err());
         assert!(Config::from_map(&with(&[("PORT", "abc")])).is_err());
         assert!(Config::from_map(&with(&[("STELLAR_RPC_URL", "ftp://x")])).is_err());
-        assert!(Config::from_map(&with(&[("STELLAR_NETWORK", "devnet")])).is_err());
+                assert!(Config::from_map(&with(&[("STELLAR_NETWORK", "devnet")])).is_err());
+        assert!(Config::from_map(&with(&[("INDEXER_START_LEDGER", "abc")])).is_err());
         assert!(Config::from_map(&with(&[("ADMIN_GITHUB_IDS", "1,x")])).is_err());
         assert!(Config::from_map(&with(&[("TOKEN_MIN_AMOUNT", "10"), ("TOKEN_MAX_AMOUNT", "5")])).is_err());
         assert!(Config::from_map(&with(&[("AI_TIMEOUT_SECS", "0")])).is_err());
@@ -543,6 +555,17 @@ mod tests {
     }
 
     #[test]
+    fn indexer_start_ledger_validation() {
+        let cfg = Config::from_map(&with(&[("INDEXER_START_LEDGER", "12345")])).unwrap();
+        assert_eq!(cfg.indexer_start_ledger, Some(12345));
+
+        let err = Config::from_map(&with(&[("INDEXER_START_LEDGER", "invalid")]))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("INDEXER_START_LEDGER"));
+    }
+
+    #[test]
     fn helpers() {
         let c = Config::from_map(&with(&[
             ("TOKEN_XLM_CONTRACT_ID", "CXLMXLMX"),
@@ -551,7 +574,7 @@ mod tests {
         ]))
         .unwrap();
         assert_eq!(c.symbol_for("CXLMXLMX"), "XLM");
-        assert_eq!(c.symbol_for("CABCDEF"), "CABC…");
+        assert_eq!(c.symbol_for("CABCDEF"), "CABCÃ¢â‚¬Â¦");
         assert!(c.is_admin(9) && !c.is_admin(8));
         assert!(c.secure_cookies());
         assert_eq!(c.api_public_url, "https://api.example");
