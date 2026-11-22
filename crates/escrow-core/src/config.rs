@@ -221,7 +221,7 @@ impl Config {
         };
         let contract_id = r.required("BOUNTY_CONTRACT_ID");
         if !contract_id.is_empty() && !strkey_c.is_match(&contract_id) {
-            r.errors.push("BOUNTY_CONTRACT_ID: must be a Soroban contract id (C…, 56 characters)".into());
+            r.errors.push("BOUNTY_CONTRACT_ID: must be a Soroban contract id (CÃ¢â‚¬Â¦, 56 characters)".into());
         }
 
         let app_id = r.matches("GITHUB_APP_ID", &digits, "must be numeric");
@@ -250,7 +250,7 @@ impl Config {
             }
         };
 
-        let relayer_secret = r.matches("RELAYER_SECRET", &strkey_s, "must be a Stellar secret key (S…, 56 characters)");
+        let relayer_secret = r.matches("RELAYER_SECRET", &strkey_s, "must be a Stellar secret key (SÃ¢â‚¬Â¦, 56 characters)");
         if network == Network::Mainnet && relayer_secret.is_some() {
             r.errors.push("RELAYER_SECRET: must not be used on mainnet; use a KMS-backed signer".into());
         }
@@ -260,7 +260,7 @@ impl Config {
             .map(|v| v.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect())
             .unwrap_or_default();
         if relayer_channel_secrets.iter().any(|s| !strkey_s.is_match(s)) {
-            r.errors.push("RELAYER_CHANNEL_SECRETS: every entry must be a Stellar secret key (S…, 56 characters)".into());
+            r.errors.push("RELAYER_CHANNEL_SECRETS: every entry must be a Stellar secret key (SÃ¢â‚¬Â¦, 56 characters)".into());
         }
         if !relayer_channel_secrets.is_empty() && (relayer_secret.is_none() || network == Network::Mainnet) {
             r.errors.push("RELAYER_CHANNEL_SECRETS: needs RELAYER_SECRET, and is not supported on mainnet yet".into());
@@ -302,10 +302,21 @@ impl Config {
             }
         };
 
-        let admin_github_ids = r
-            .matches("ADMIN_GITHUB_IDS", &digits_list, "comma-separated numeric GitHub ids")
-            .map(|v| v.split(',').filter_map(|x| x.parse().ok()).collect())
-            .unwrap_or_default();
+        let admin_github_ids = match r.matches("ADMIN_GITHUB_IDS", &digits_list, "comma-separated numeric GitHub ids") {
+            Some(v) => {
+                let mut ids = Vec::new();
+                for x in v.split(',') {
+                    match x.parse::<i64>() {
+                        Ok(id) => ids.push(id),
+                        Err(_) => {
+                            r.errors.push(format!("ADMIN_GITHUB_IDS: `{x}` cannot be parsed as an i64 id"));
+                        }
+                    }
+                }
+                ids
+            }
+            None => Vec::new(),
+        };
         let anthropic_api_key = r.optional("ANTHROPIC_API_KEY");
         if anthropic_api_key.as_deref().is_some_and(|k| k.len() < 10) {
             r.errors.push("ANTHROPIC_API_KEY: looks too short".into());
@@ -410,7 +421,7 @@ impl Config {
         } else if !self.token_xlm.is_empty() && token == self.token_xlm {
             "XLM".into()
         } else {
-            format!("{}…", &token[..token.len().min(4)])
+            format!("{}Ã¢â‚¬Â¦", &token[..token.len().min(4)])
         }
     }
 
@@ -529,6 +540,7 @@ mod tests {
         assert!(Config::from_map(&with(&[("STELLAR_RPC_URL", "ftp://x")])).is_err());
         assert!(Config::from_map(&with(&[("STELLAR_NETWORK", "devnet")])).is_err());
         assert!(Config::from_map(&with(&[("ADMIN_GITHUB_IDS", "1,x")])).is_err());
+        assert!(Config::from_map(&with(&[("ADMIN_GITHUB_IDS", "9223372036854775808")])).is_err());
         assert!(Config::from_map(&with(&[("TOKEN_MIN_AMOUNT", "10"), ("TOKEN_MAX_AMOUNT", "5")])).is_err());
         assert!(Config::from_map(&with(&[("AI_TIMEOUT_SECS", "0")])).is_err());
         assert!(Config::from_map(&with(&[("AI_TIMEOUT_SECS", "180")])).is_err());
@@ -543,6 +555,14 @@ mod tests {
     }
 
     #[test]
+    fn admin_github_ids_overflowing_i64_is_rejected() {
+        let err = Config::from_map(&with(&[("ADMIN_GITHUB_IDS", "9223372036854775808")]))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("ADMIN_GITHUB_IDS"));
+    }
+
+    #[test]
     fn helpers() {
         let c = Config::from_map(&with(&[
             ("TOKEN_XLM_CONTRACT_ID", "CXLMXLMX"),
@@ -551,7 +571,7 @@ mod tests {
         ]))
         .unwrap();
         assert_eq!(c.symbol_for("CXLMXLMX"), "XLM");
-        assert_eq!(c.symbol_for("CABCDEF"), "CABC…");
+        assert_eq!(c.symbol_for("CABCDEF"), "CABCÃ¢â‚¬Â¦");
         assert!(c.is_admin(9) && !c.is_admin(8));
         assert!(c.secure_cookies());
         assert_eq!(c.api_public_url, "https://api.example");
