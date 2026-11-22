@@ -56,8 +56,14 @@ enum Cmd {
 }
 
 fn init_logging(to_stderr: bool) {
+    let raw = std::env::var("LOG_LEVEL").unwrap_or_else(|_| "info".into());
     let filter = tracing_subscriber::EnvFilter::try_from_default_env()
-        .or_else(|_| tracing_subscriber::EnvFilter::try_new(std::env::var("LOG_LEVEL").unwrap_or_else(|_| "info".into())))
+        .or_else(|_| {
+            tracing_subscriber::EnvFilter::try_new(&raw).map_err(|e| {
+                eprintln!("escrowd: invalid LOG_LEVEL '{raw}': {e}, falling back to 'info'");
+                e
+            })
+        })
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
     let json_logs = std::env::var("LOG_FORMAT").is_ok_and(|f| f == "json");
     if to_stderr {
