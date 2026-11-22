@@ -3,6 +3,7 @@
 use crate::indexer::CURSOR_ID;
 use chrono::{DateTime, Duration, Utc};
 use escrow_chain::ChainReader;
+use escrow_core::PayoutStatus;
 use escrow_db::{Db, audit, disputes, jobs, payouts, webhooks};
 use serde::Serialize;
 use std::{collections::HashMap, sync::Mutex, time::Instant};
@@ -66,7 +67,7 @@ pub async fn collect_alerts(db: &Db, a: &AlertInputs) -> Result<Vec<Alert>, sqlx
     {
         out.push(Alert::new("relayer_balance", format!("Relayer balance low: {b:.2} XLM (alert below {})", a.min_relayer_xlm)));
     }
-    let failed = payouts::count_by_status(&db.pool, &["FAILED"]).await?;
+    let failed = payouts::count_by_status(&db.pool, &[PayoutStatus::Failed]).await?;
     if failed > 0 {
         out.push(Alert::new("payouts_failed", format!("{failed} payout(s) FAILED and need attention")));
     }

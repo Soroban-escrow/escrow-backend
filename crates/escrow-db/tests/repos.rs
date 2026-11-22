@@ -2,6 +2,7 @@
 //! (needs DATABASE_URL pointing at a server where the role may CREATE DATABASE).
 
 use chrono::{Duration, Utc};
+use escrow_core::PayoutStatus;
 use escrow_db::{Db, MIGRATOR, audit, bounties, disputes, github, intents, jobs, payouts, prs, reviews, sessions, users, webhooks};
 use sqlx::PgPool;
 
@@ -287,14 +288,14 @@ async fn payout_transitions_are_guarded(pool: PgPool) {
     let mut tasks = vec![];
     for _ in 0..8 {
         let (pool, id) = (pool.clone(), p.id.clone());
-        tasks.push(tokio::spawn(async move { payouts::release_from_pending(&pool, &id, "QUEUED", "GWIN").await.unwrap() }));
+        tasks.push(tokio::spawn(async move { payouts::release_from_pending(&pool, &id, PayoutStatus::Queued, "GWIN").await.unwrap() }));
     }
     let mut wins = 0;
     for t in tasks {
         wins += usize::from(t.await.unwrap());
     }
     assert_eq!(wins, 1, "exactly one caller moves it out of PENDING_WALLET");
-    assert!(!payouts::release_from_pending(&pool, &p.id, "AWAITING_MAINTAINER", "GOTHER").await.unwrap());
+    assert!(!payouts::release_from_pending(&pool, &p.id, PayoutStatus::AwaitingMaintainer, "GOTHER").await.unwrap());
 
     payouts::mark_submitted(&pool, &p.id, "hash1").await.unwrap();
     let s = payouts::get(&pool, &p.id).await.unwrap().unwrap();

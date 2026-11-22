@@ -19,6 +19,7 @@ use axum::{
 };
 use chrono::Duration;
 use escrow_chain::keys;
+use escrow_core::PayoutStatus;
 use escrow_db::{Dispute, audit, disputes, github, jobs, payouts, webhooks};
 use escrow_engine::indexer::CURSOR_ID;
 use serde::{Deserialize, Serialize};
@@ -193,10 +194,10 @@ pub async fn list_payouts(
 ) -> ApiResult<Json<PayoutsPage>> {
     admin(&s, &headers, &ip, false).await?;
     let Query(q) = q.map_err(|_| ApiError::bad_request("invalid query"))?;
-    let status = q.status.unwrap_or_else(|| "FAILED".into());
-    if status.parse::<escrow_core::PayoutStatus>().is_err() {
-        return Err(ApiError::bad_request("invalid status"));
-    }
+    let status = match q.status.as_deref() {
+        None => PayoutStatus::Failed,
+        Some(s) => s.parse::<PayoutStatus>().map_err(|_| ApiError::bad_request("invalid status"))?,
+    };
     let bounty_id = match q.bounty_id.as_deref() {
         None => None,
         Some(v) if digits(v, 18) => Some(v.parse::<i64>().map_err(|_| ApiError::bad_request("invalid bountyId"))?),
@@ -230,7 +231,7 @@ pub async fn retry_payout(
 ) -> ApiResult<Json<serde_json::Value>> {
     let a = admin(&s, &headers, &ip, true).await?;
     let p = if id_ok(&id) { payouts::get(&s.db.pool, &id).await? } else { None }.ok_or_else(|| ApiError::not_found("payout"))?;
-    if p.status != "FAILED" {
+    if p.status() != PayoutStatus::Failed {
         return Err(ApiError::conflict("wrong_state", &format!("payout is {}", p.status)));
     }
     if p.tx_hash.is_some() {
@@ -275,8 +276,8 @@ pub async fn status(
     let anomaly_count = audit::count_anomalies_24h(&s.db.pool).await?;
     Ok(Json(json!({
         "indexerLedger": cursor.as_ref().map(|c| c.ledger), "indexerUpdatedAt": cursor.map(|c| c.updated_at),
-        "failedPayouts": payouts::count_by_status(&s.db.pool, &["FAILED"]).await?,
-        "waitingPayouts": payouts::count_by_status(&s.db.pool, &["PENDING_WALLET", "AWAITING_MAINTAINER"]).await?,
+        "failedPayouts": payouts::count_by_status(&s.db.pool, &[PayoutStatus::Failed]).await?,
+        "waitingPayouts": payouts::count_by_status(&s.db.pool, &[PayoutStatus::PendingWallet, PayoutStatus::AwaitingMaintainer]).await?,
         "openDisputes": disputes::count_open(&s.db.pool).await?,
         "deadJobs": jobs::count_dead(&s.db.pool).await?,
         "pendingJobs": jobs::count_pending(&s.db.pool).await?,

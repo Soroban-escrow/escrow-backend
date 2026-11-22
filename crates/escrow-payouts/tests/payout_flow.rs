@@ -3,7 +3,7 @@
 use async_trait::async_trait;
 use chrono::{Duration, Utc};
 use escrow_chain::{ChainBounty, ChainError, ChainReader, ContractConfig, ReleaseSigner, TxOutcome};
-use escrow_core::BountyStatus;
+use escrow_core::{BountyStatus, PayoutStatus};
 use escrow_db::{Db, MIGRATOR, bounties, github, payouts, users};
 use escrow_payouts::{
     Advance, MAX_ATTEMPTS, MergeOutcome, Notifier, PayoutDeps, PayoutError, RelayResult, RetryTable, advance, on_merge, on_wallet_linked,
@@ -452,6 +452,6 @@ async fn one_bad_payout_does_not_block_the_others(pool: PgPool) {
     e.signer.submits.lock().unwrap().push_back(Err(ChainError::Busy)); // the first one stumbles
     let mut retry = RetryTable::new();
     assert_eq!(relayer_pass(&e.d, &*e.signer, &mut retry, Instant::now()).await.unwrap(), 2);
-    let paid = payouts::by_status(&pool, "CONFIRMED", 10).await.unwrap();
+    let paid = payouts::by_status(&pool, PayoutStatus::Confirmed, 10).await.unwrap();
     assert_eq!(paid.len(), 1, "the second was paid despite the first failing");
 }

@@ -3,6 +3,7 @@ mod common;
 use chrono::{Duration, Utc};
 use common::*;
 use escrow_chain::ChainError;
+use escrow_core::PayoutStatus;
 use escrow_db::{MIGRATOR, audit, bounties, disputes, github, intents, jobs, payouts, prs, untracked, users, webhooks};
 use escrow_engine::indexer::{
     CURSOR_ID, FAILURE_ALERT_THRESHOLD, MAX_PAGES, apply_untracked_for_repo, min_untracked_ledger_for_repo, poll_once, run,
@@ -143,7 +144,7 @@ async fn a_release_closes_the_bounty_confirms_the_payout_and_finds_the_winner_by
     poll_once(&w.indexer()).await.unwrap();
     // a relayer payout is mid-flight when the chain confirms it
     let p = payouts::create_pending(&pool, 4, 7, 900).await.unwrap().unwrap();
-    payouts::release_from_pending(&pool, &p.id, "QUEUED", &win).await.unwrap();
+    payouts::release_from_pending(&pool, &p.id, PayoutStatus::Queued, &win).await.unwrap();
     payouts::mark_submitted(&pool, &p.id, "relayerhash").await.unwrap();
 
     let rel = released(4, &win, &addr(9), 105, 2);
