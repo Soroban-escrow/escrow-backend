@@ -200,6 +200,29 @@ impl<'a> Reader<'a> {
     }
 }
 
+pub fn is_valid_log_level(s: &str) -> bool {
+    let s = s.trim();
+    if s.is_empty() {
+        return false;
+    }
+    for part in s.split(',') {
+        let part = part.trim();
+        if part.is_empty() {
+            continue;
+        }
+        let level = if let Some((_target, lvl)) = part.split_once('=') {
+            lvl.trim()
+        } else {
+            part
+        };
+        match level.to_ascii_lowercase().as_str() {
+            "error" | "warn" | "info" | "debug" | "trace" | "off" => {}
+            _ => return false,
+        }
+    }
+    true
+}
+
 impl Config {
     pub fn from_env() -> Result<Self, ConfigError> {
         Self::from_map(&std::env::vars().collect())
@@ -346,8 +369,13 @@ impl Config {
             r.errors.push("AI_PRICE_INPUT_PER_MTOK and AI_PRICE_OUTPUT_PER_MTOK: must be positive".into());
         }
 
+        let log_level = r.string("LOG_LEVEL", "info");
+        if !is_valid_log_level(&log_level) {
+            r.errors.push(format!("LOG_LEVEL: '{log_level}' is not a valid log level (expected error, warn, info, debug, trace, off)"));
+        }
+
         let cfg = Config {
-            log_level: r.string("LOG_LEVEL", "info"),
+            log_level,
             port: r.number("PORT", 3001u16),
             database_url: r.required("DATABASE_URL"),
             network,
@@ -526,6 +554,7 @@ mod tests {
         assert!(Config::from_map(&with(&[("BOUNTY_CONTRACT_ID", "GABC")])).is_err());
         assert!(Config::from_map(&with(&[("SESSION_SECRET", "short")])).is_err());
         assert!(Config::from_map(&with(&[("PORT", "abc")])).is_err());
+        assert!(Config::from_map(&with(&[("LOG_LEVEL", "verbose")])).is_err());
         assert!(Config::from_map(&with(&[("STELLAR_RPC_URL", "ftp://x")])).is_err());
         assert!(Config::from_map(&with(&[("STELLAR_NETWORK", "devnet")])).is_err());
         assert!(Config::from_map(&with(&[("ADMIN_GITHUB_IDS", "1,x")])).is_err());
@@ -533,6 +562,20 @@ mod tests {
         assert!(Config::from_map(&with(&[("AI_TIMEOUT_SECS", "0")])).is_err());
         assert!(Config::from_map(&with(&[("AI_TIMEOUT_SECS", "180")])).is_err());
         assert!(Config::from_map(&with(&[("AI_TIMEOUT_SECS", "240")])).is_err());
+    }
+
+    #[test]
+    fn log_level_validation() {
+        assert_eq!(Config::from_map(&base()).unwrap().log_level, "info");
+        assert_eq!(Config::from_map(&with(&[("LOG_LEVEL", "debug")])).unwrap().log_level, "debug");
+        assert_eq!(Config::from_map(&with(&[("LOG_LEVEL", "warn")])).unwrap().log_level, "warn");
+        assert_eq!(Config::from_map(&with(&[("LOG_LEVEL", "error")])).unwrap().log_level, "error");
+        assert_eq!(Config::from_map(&with(&[("LOG_LEVEL", "trace")])).unwrap().log_level, "trace");
+        assert_eq!(Config::from_map(&with(&[("LOG_LEVEL", "off")])).unwrap().log_level, "off");
+        assert_eq!(Config::from_map(&with(&[("LOG_LEVEL", "escrowd=debug,info")])).unwrap().log_level, "escrowd=debug,info");
+
+        let err = Config::from_map(&with(&[("LOG_LEVEL", "verbose")])).unwrap_err().to_string();
+        assert!(err.contains("LOG_LEVEL"), "missing LOG_LEVEL in error: {err}");
     }
 
     #[test]
