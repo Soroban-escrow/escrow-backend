@@ -4,7 +4,7 @@ use regex::Regex;
 use std::sync::LazyLock;
 
 /// `(code, variant name, message for people)`. Clients branch on the name; the message is shown as is.
-pub const CONTRACT_ERRORS: [(u32, &str, &str); 17] = [
+pub const CONTRACT_ERRORS: [(u32, &str, &str); 26] = [
     (1, "AlreadyInitialized", "The escrow contract has already been initialized."),
     (2, "NotInitialized", "The escrow contract has not been initialized yet."),
     (3, "Unauthorized", "This account is not allowed to perform this action."),
@@ -22,6 +22,15 @@ pub const CONTRACT_ERRORS: [(u32, &str, &str); 17] = [
     (15, "InvalidFee", "The fee is not valid."),
     (16, "Overflow", "The amount is too large to process."),
     (17, "RelayerNotAllowed", "This bounty was funded without relayer permission, so the maintainer must sign the release."),
+    (18, "TopUpLimitReached", "This bounty cannot be topped up any further."),
+    (19, "DisputeNotExpired", "The dispute window has not expired yet."),
+    (20, "DisputeAlreadyUsed", "A dispute was already raised for this bounty."),
+    (21, "NothingToClaim", "There is nothing to claim for this account."),
+    (22, "AlreadyClaimed", "This has already been claimed."),
+    (23, "ConflictOfInterest", "The winner cannot be the arbiter or the treasury."),
+    (24, "UnexpectedTransferAmount", "The token credited a different amount than requested, so the transfer was refused."),
+    (25, "NoOpAdminChange", "The new admin is the same as the current admin."),
+    (26, "NothingToSweep", "There is no excess balance to sweep."),
 ];
 
 static CONTRACT_ERR: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"Error\(Contract, #(\d+)\)").unwrap());
