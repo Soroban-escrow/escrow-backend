@@ -833,6 +833,17 @@ async fn submitting_a_signed_transaction_is_relayed_and_failures_are_explained(p
         (bad.status, bad.body["error"]["code"].clone(), bad.body["error"]["message"].as_str()),
         (StatusCode::UNPROCESSABLE_ENTITY, json!("submit_rejected"), Some("this is not a call to the SkillEscrow contract"))
     );
+    for (raw, name, fragment) in [
+        ("HostError: Error(Contract, #9)", "IssueAlreadyFunded", "already has a bounty"),
+        ("HostError: Error(Contract, #12)", "DeadlineNotReached", "grace period"),
+    ] {
+        *e.txb.fail_with.lock().unwrap() = Some(escrow_chain::ChainError::Simulation(raw.into()));
+        let r = call(&e.app, Method::POST, "/tx/submit", &s.hdrs(true), Some(json!({ "xdr": "AAAA-signed-envelope" }))).await;
+        assert_eq!(r.status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(r.body["error"]["code"], json!("contract_error"));
+        assert_eq!(r.body["error"]["contractError"], json!(name));
+        assert!(r.body["error"]["message"].as_str().unwrap().contains(fragment), "{}", r.body);
+    }
     assert_eq!(call(&e.app, Method::POST, "/tx/submit", &s.hdrs(true), Some(json!({ "xdr": "x" }))).await.status, StatusCode::BAD_REQUEST);
     assert_eq!(
         call(&e.app, Method::POST, "/tx/submit", &s.hdrs(true), Some(json!({ "xdr": "y".repeat(20_001) }))).await.status,

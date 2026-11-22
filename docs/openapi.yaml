@@ -275,7 +275,20 @@ paths:
       responses:
         '200': { description: Submitted, content: { application/json: { schema: { type: object, properties: { hash: { type: string } } } } } }
         '400': { $ref: '#/components/responses/Error' }
-        '422': { $ref: '#/components/responses/Error' }
+        '422':
+          description: Refused. `error.code` is `submit_rejected` for a transaction that is not allowed, or `contract_error` when the escrow contract rejected the call; then `error.contractError` names the variant (for example `IssueAlreadyFunded`) and `error.message` is a friendly explanation.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: object
+                    required: [code, message]
+                    properties:
+                      code: { type: string, enum: [submit_rejected, contract_error] }
+                      message: { type: string }
+                      contractError: { type: string, description: 'Contract error variant; present only when code is contract_error', example: IssueAlreadyFunded }
         '503': { $ref: '#/components/responses/Error' }
   /bounties/{id}/release/build:
     post:
