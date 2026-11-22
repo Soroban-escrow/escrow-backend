@@ -224,6 +224,14 @@ impl Config {
             r.errors.push("BOUNTY_CONTRACT_ID: must be a Soroban contract id (C…, 56 characters)".into());
         }
 
+        let token_usdc = r.string("TOKEN_USDC_CONTRACT_ID", "");
+        let token_xlm = r.string("TOKEN_XLM_CONTRACT_ID", "");
+        for (name, id) in [("TOKEN_USDC_CONTRACT_ID", &token_usdc), ("TOKEN_XLM_CONTRACT_ID", &token_xlm)] {
+            if !id.is_empty() && !strkey_c.is_match(id) {
+                r.errors.push(format!("{name}: must be a Soroban contract id (C…, 56 characters)"));
+            }
+        }
+
         let app_id = r.matches("GITHUB_APP_ID", &digits, "must be numeric");
         let slug = r.optional("GITHUB_APP_SLUG");
         let key = r.optional("GITHUB_APP_PRIVATE_KEY");
@@ -376,8 +384,8 @@ impl Config {
             relayer_channel_secrets,
             relayer_min_xlm_alert: r.number("RELAYER_MIN_XLM_ALERT", 50.0f64),
             alert_webhook_url: r.optional("ALERT_WEBHOOK_URL"),
-            token_usdc: r.string("TOKEN_USDC_CONTRACT_ID", ""),
-            token_xlm: r.string("TOKEN_XLM_CONTRACT_ID", ""),
+            token_usdc,
+            token_xlm,
             token_min,
             token_max,
             min_days,
@@ -496,6 +504,29 @@ mod tests {
     }
 
     #[test]
+    fn token_contract_ids_are_validated_when_set() {
+        let defaults = Config::from_map(&base()).unwrap();
+        assert!(defaults.token_usdc.is_empty() && defaults.token_xlm.is_empty());
+
+        let ok = Config::from_map(&with(&[("TOKEN_USDC_CONTRACT_ID", CONTRACT), ("TOKEN_XLM_CONTRACT_ID", CONTRACT)])).unwrap();
+        assert_eq!((ok.token_usdc.as_str(), ok.token_xlm.as_str()), (CONTRACT, CONTRACT));
+
+        let e = Config::from_map(&with(&[("TOKEN_USDC_CONTRACT_ID", "CXLMXLMX")])).unwrap_err().to_string();
+        assert!(e.contains("TOKEN_USDC_CONTRACT_ID") && !e.contains("TOKEN_XLM_CONTRACT_ID"));
+    }
+
+    #[test]
+    fn token_id_errors_are_reported_with_the_others() {
+        let e =
+            Config::from_map(&with(&[("TOKEN_USDC_CONTRACT_ID", "bad"), ("TOKEN_XLM_CONTRACT_ID", "G123"), ("STELLAR_NETWORK", "nope")]))
+                .unwrap_err()
+                .to_string();
+        for key in ["TOKEN_USDC_CONTRACT_ID", "TOKEN_XLM_CONTRACT_ID", "STELLAR_NETWORK"] {
+            assert!(e.contains(key), "{key} missing from: {e}");
+        }
+    }
+
+    #[test]
     fn relayer_secret_is_refused_on_mainnet() {
         let sk = format!("S{}", "A".repeat(55));
         assert!(Config::from_map(&with(&[("RELAYER_SECRET", &sk)])).is_ok());
@@ -545,12 +576,12 @@ mod tests {
     #[test]
     fn helpers() {
         let c = Config::from_map(&with(&[
-            ("TOKEN_XLM_CONTRACT_ID", "CXLMXLMX"),
+            ("TOKEN_XLM_CONTRACT_ID", CONTRACT),
             ("ADMIN_GITHUB_IDS", "7,9"),
             ("API_PUBLIC_URL", "https://api.example/"),
         ]))
         .unwrap();
-        assert_eq!(c.symbol_for("CXLMXLMX"), "XLM");
+        assert_eq!(c.symbol_for(CONTRACT), "XLM");
         assert_eq!(c.symbol_for("CABCDEF"), "CABC…");
         assert!(c.is_admin(9) && !c.is_admin(8));
         assert!(c.secure_cookies());
