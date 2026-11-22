@@ -9,10 +9,10 @@ Secrets never appear in logs or `Debug` output.
 | Variable | Notes |
 |---|---|
 | `DATABASE_URL` | PostgreSQL URL. Prisma-style `?schema=public` suffixes are fine. |
-| `BOUNTY_CONTRACT_ID` | The deployed escrow contract, `C…` (56 chars). |
-| `SESSION_SECRET` | ≥ 32 chars. Signs the OAuth state cookie. `openssl rand -hex 32`. |
-| `CSRF_SECRET` | ≥ 32 chars. Binds CSRF tokens to sessions. |
-| `GITHUB_WEBHOOK_SECRET` | ≥ 8 chars. Must equal the secret set on the GitHub App. |
+| `BOUNTY_CONTRACT_ID` | The deployed escrow contract, `Câ€¦` (56 chars). |
+| `SESSION_SECRET` | â‰¥ 32 chars. Signs the OAuth state cookie. `openssl rand -hex 32`. |
+| `CSRF_SECRET` | â‰¥ 32 chars. Binds CSRF tokens to sessions. |
+| `GITHUB_WEBHOOK_SECRET` | â‰¥ 8 chars. Must equal the secret set on the GitHub App. |
 
 ## Server and database
 
@@ -35,13 +35,13 @@ Secrets never appear in logs or `Debug` output.
 | `STELLAR_NETWORK` | `testnet` | `testnet`, `mainnet` or `local`. Sets the passphrase and explorer defaults. |
 | `STELLAR_RPC_URL` | testnet: `https://soroban-testnet.stellar.org` | **Required on mainnet**: choose a provider on purpose. |
 | `STELLAR_NETWORK_PASSPHRASE` | by network | Override only for `local`/custom networks. |
-| `TOKEN_XLM_CONTRACT_ID`, `TOKEN_USDC_CONTRACT_ID` | empty | The token contracts bounties can be paid in. **Leave one empty to disable that token** (`/bounty … USDC` is then refused with a clear message). On testnet, the native XLM token's contract id is the Stellar Asset Contract for native; USDC needs a verified issuer's contract. |
+| `TOKEN_XLM_CONTRACT_ID`, `TOKEN_USDC_CONTRACT_ID` | empty | The token contracts bounties can be paid in. **Leave one empty to disable that token** (`/bounty â€¦ USDC` is then refused with a clear message). On testnet, the native XLM token's contract id is the Stellar Asset Contract for native; USDC needs a verified issuer's contract. |
 | `TOKEN_MIN_AMOUNT`, `TOKEN_MAX_AMOUNT` | `1`, `500` | Per-bounty limits **in whole tokens**, enforced when parsing `/bounty`. The contract enforces its own (authoritative) limits too. |
 | `MIN_DAYS`, `MAX_DAYS` | `1`, `90` | Allowed bounty duration. |
-| `INDEXER_START_LEDGER` | none | Where a brand-new database starts reading events. Best: the contract's deployment ledger. |
+| `INDEXER_START_LEDGER` | none | Where a brand-new database starts reading events (numeric ledger sequence number, e.g. `12345`). Best: the contract's deployment ledger. |
 | `INDEXER_LOOKBACK_LEDGERS` | `1000` | If no start ledger: begin this many ledgers behind the tip. |
 | `INDEXER_INTERVAL_SECS` | `5` | Poll interval. |
-| `EXPLORER_TX_URL_TEMPLATE` | by network | Must contain `{hash}`. Used in "Paid …" comments. |
+| `EXPLORER_TX_URL_TEMPLATE` | by network | Must contain `{hash}`. Used in "Paid â€¦" comments. |
 
 ## GitHub App (all five, or none)
 
@@ -55,9 +55,9 @@ Secrets never appear in logs or `Debug` output.
 
 | Variable | Default | Notes |
 |---|---|---|
-| `RELAYER_SECRET` | none | A funded `S…` secret key whose address is registered in the contract as the relayer. **Refused on mainnet** (start-up error): use a KMS-backed signer there. At worker start the address is compared with the contract's registered relayer; a mismatch disables automatic payouts and logs an error rather than burning attempts. |
+| `RELAYER_SECRET` | none | A funded `Sâ€¦` secret key whose address is registered in the contract as the relayer. **Refused on mainnet** (start-up error): use a KMS-backed signer there. At worker start the address is compared with the contract's registered relayer; a mismatch disables automatic payouts and logs an error rather than burning attempts. |
 | `RELAYER_MIN_XLM_ALERT` | `50` | Alert when the relayer's balance drops below this. |
-| `ALERT_WEBHOOK_URL` | none | Receives `{ "text": "SkillEscrow: …" }` for each alert (Slack-compatible), each distinct message at most once an hour. |
+| `ALERT_WEBHOOK_URL` | none | Receives `{ "text": "SkillEscrow: â€¦" }` for each alert (Slack-compatible), each distinct message at most once an hour. |
 
 ## AI review (optional, advisory)
 
