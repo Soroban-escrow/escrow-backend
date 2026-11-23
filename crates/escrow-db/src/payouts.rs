@@ -2,6 +2,7 @@
 //! second merged PR can never create a second payout. Every status change is a guarded UPDATE.
 
 use crate::{is_unique_violation, models::Payout, new_id};
+use escrow_core::PayoutStatus;
 use serde::Serialize;
 use sqlx::{PgExecutor, Postgres, QueryBuilder};
 
@@ -54,10 +55,10 @@ pub async fn all_for_bounty<'e>(ex: impl PgExecutor<'e>, bounty_id: i64) -> Resu
 }
 
 /// Moves PENDING_WALLET forward. Guarded: of several concurrent callers exactly one gets `true`.
-pub async fn release_from_pending<'e>(ex: impl PgExecutor<'e>, id: &str, status: &str, address: &str) -> Result<bool, sqlx::Error> {
+pub async fn release_from_pending<'e>(ex: impl PgExecutor<'e>, id: &str, status: PayoutStatus, address: &str) -> Result<bool, sqlx::Error> {
     sqlx::query("UPDATE payouts SET status = $2, winner_address = $3, updated_at = now() WHERE id = $1 AND status = 'PENDING_WALLET'")
         .bind(id)
-        .bind(status)
+        .bind(status.as_str())
         .bind(address)
         .execute(ex)
         .await
@@ -148,7 +149,7 @@ pub async fn due<'e>(ex: impl PgExecutor<'e>, limit: i64) -> Result<Vec<Payout>,
 
 #[derive(Debug, Clone)]
 pub struct ListFilter {
-    pub status: String,
+    pub status: PayoutStatus,
     pub bounty_id: Option<i64>,
     pub cursor: Option<String>,
     pub limit: i64,
@@ -158,7 +159,7 @@ pub struct ListFilter {
 /// can tell whether another page exists.
 pub async fn list<'e>(ex: impl PgExecutor<'e>, f: &ListFilter) -> Result<Vec<Payout>, sqlx::Error> {
     let mut q: QueryBuilder<Postgres> = QueryBuilder::new(format!("SELECT {COLS} FROM payouts WHERE status = "));
-    q.push_bind(f.status.clone());
+    q.push_bind(f.status.as_str());
     if let Some(bounty_id) = f.bounty_id {
         q.push(" AND bounty_id = ").push_bind(bounty_id);
     }
@@ -169,9 +170,9 @@ pub async fn list<'e>(ex: impl PgExecutor<'e>, f: &ListFilter) -> Result<Vec<Pay
     q.build_query_as::<Payout>().fetch_all(ex).await
 }
 
-pub async fn by_status<'e>(ex: impl PgExecutor<'e>, status: &str, limit: i64) -> Result<Vec<Payout>, sqlx::Error> {
+pub async fn by_status<'e>(ex: impl PgExecutor<'e>, status: PayoutStatus, limit: i64) -> Result<Vec<Payout>, sqlx::Error> {
     sqlx::query_as(sqlx::AssertSqlSafe(format!("SELECT {COLS} FROM payouts WHERE status = $1 ORDER BY updated_at DESC, id DESC LIMIT $2")))
-        .bind(status)
+        .bind(status.as_str())
         .bind(limit)
         .fetch_all(ex)
         .await
@@ -186,8 +187,8 @@ pub async fn pending_for_winner<'e>(ex: impl PgExecutor<'e>, github_id: i64) -> 
     .await
 }
 
-pub async fn count_by_status<'e>(ex: impl PgExecutor<'e>, statuses: &[&str]) -> Result<i64, sqlx::Error> {
-    let s: Vec<String> = statuses.iter().map(|s| s.to_string()).collect();
+pub async fn count_by_status<'e>(ex: impl PgExecutor<'e>, statuses: &[PayoutStatus]) -> Result<i64, sqlx::Error> {
+    let s: Vec<&'static str> = statuses.iter().map(|s| s.as_str()).collect();
     sqlx::query_scalar("SELECT count(*) FROM payouts WHERE status = ANY($1)").bind(s).fetch_one(ex).await
 }
 

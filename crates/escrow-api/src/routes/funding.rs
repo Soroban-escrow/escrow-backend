@@ -15,7 +15,7 @@ use axum::{
 };
 use chrono::{DateTime, Utc};
 use escrow_chain::{FundParams, keys};
-use escrow_core::BountyStatus;
+use escrow_core::{BountyStatus, PayoutStatus};
 use escrow_db::{bounties, intents, payouts};
 use serde::Deserialize;
 use serde_json::json;
@@ -157,7 +157,7 @@ pub async fn build_release(
 ) -> ApiResult<Json<serde_json::Value>> {
     let b = maintainer_bounty(&s, &headers, &ip, &id).await?;
     let payout = payouts::for_bounty(&s.db.pool, b.id).await?;
-    let (Some(p), true) = (&payout, payout.as_ref().is_some_and(|p| p.status == "AWAITING_MAINTAINER")) else {
+    let (Some(p), true) = (&payout, payout.as_ref().is_some_and(|p| p.status() == PayoutStatus::AwaitingMaintainer)) else {
         return Err(ApiError::conflict("nothing_to_release", "no payout is waiting for your signature"));
     };
     let winner =

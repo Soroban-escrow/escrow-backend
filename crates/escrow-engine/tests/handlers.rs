@@ -2,7 +2,7 @@ mod common;
 
 use chrono::{Duration, Utc};
 use common::*;
-use escrow_core::BountyStatus;
+use escrow_core::{BountyStatus, PayoutStatus};
 use escrow_db::{MIGRATOR, audit, bounties, disputes, github, intents, payouts, prs, users};
 use escrow_engine::{EngineError, dispatch::dispatch_webhook};
 use escrow_github::GithubError;
@@ -242,7 +242,7 @@ async fn merging_a_pr_that_closes_a_bounty_starts_the_payout(pool: PgPool) {
         "pull_request:1"
     );
     let p = payouts::for_bounty(&pool, 4).await.unwrap().unwrap();
-    assert_eq!((p.status.as_str(), p.winner_address.as_deref(), p.pr_number), ("QUEUED", Some("GCONTRIBUTOR"), 7));
+    assert_eq!((p.status(), p.winner_address.as_deref(), p.pr_number), (PayoutStatus::Queued, Some("GCONTRIBUTOR"), 7));
     let pr = prs::get(&pool, 100).await.unwrap().unwrap();
     assert_eq!((pr.state.as_str(), pr.author_login.as_str()), ("merged", "user900"));
     assert_eq!(prs::for_bounty(&pool, 4).await.unwrap().len(), 1);
@@ -253,7 +253,7 @@ async fn a_contributor_without_a_wallet_is_told_on_the_pr(pool: PgPool) {
     let w = world(pool.clone()).await;
     fund_bounty(&w, 4, 3).await;
     run(&w, "pull_request", &pr_event("closed", 7, 100, 900, "Fixes #3", true, false, "closed")).await.unwrap();
-    assert_eq!(payouts::for_bounty(&pool, 4).await.unwrap().unwrap().status, "PENDING_WALLET");
+    assert_eq!(payouts::for_bounty(&pool, 4).await.unwrap().unwrap().status(), PayoutStatus::PendingWallet);
     let c = &w.gh.comments()[0];
     assert_eq!(c.issue, 7, "the nudge goes on the PR");
     assert!(c.body.contains("Link your wallet at https://app.example/me"));
@@ -267,7 +267,7 @@ async fn one_pr_can_close_two_bounties_and_both_are_paid(pool: PgPool) {
     seed::user(&w.db, 900, "dev", Some("GCONTRIBUTOR")).await;
     run(&w, "pull_request", &pr_event("closed", 7, 100, 900, "Closes #3 and fixes #4", true, false, "closed")).await.unwrap();
     for b in [4, 5] {
-        assert_eq!(payouts::for_bounty(&pool, b).await.unwrap().unwrap().status, "QUEUED", "bounty {b}");
+        assert_eq!(payouts::for_bounty(&pool, b).await.unwrap().unwrap().status(), PayoutStatus::Queued, "bounty {b}");
     }
 }
 

@@ -3,7 +3,7 @@
 use async_trait::async_trait;
 use chrono::{Duration, Utc};
 use escrow_chain::{ChainBounty, ChainError, ChainReader, ContractConfig, ReleaseSigner, TxOutcome};
-use escrow_core::BountyStatus;
+use escrow_core::{BountyStatus, PayoutStatus};
 use escrow_db::{Db, MIGRATOR, bounties, github, payouts, users};
 use escrow_payouts::{
     Advance, MAX_ATTEMPTS, MergeOutcome, Notifier, PayoutDeps, PayoutError, RelayResult, RetryTable, advance, on_merge, on_wallet_linked,
@@ -164,8 +164,8 @@ async fn contributor(pool: &PgPool, github_id: i64, wallet: Option<&str>) {
     }
 }
 
-async fn status(pool: &PgPool) -> String {
-    payouts::for_bounty(pool, 4).await.unwrap().unwrap().status
+async fn status(pool: &PgPool) -> PayoutStatus {
+    payouts::for_bounty(pool, 4).await.unwrap().unwrap().status()
 }
 
 // ---- merge handling ----
@@ -176,7 +176,7 @@ async fn a_merge_with_a_linked_wallet_and_relayer_opt_in_is_queued(pool: PgPool)
     contributor(&pool, 900, Some(WINNER)).await;
     assert_eq!(on_merge(&e.d, 4, 7, 900).await.unwrap(), MergeOutcome::Created);
     let p = payouts::for_bounty(&pool, 4).await.unwrap().unwrap();
-    assert_eq!((p.status.as_str(), p.winner_address.as_deref(), p.pr_number), ("QUEUED", Some(WINNER), 7));
+    assert_eq!((p.status(), p.winner_address.as_deref(), p.pr_number), (PayoutStatus::Queued, Some(WINNER), 7));
     assert!(e.notes.all().is_empty());
 }
 
@@ -185,14 +185,14 @@ async fn a_merge_without_a_wallet_waits_and_asks_for_one_then_continues_when_lin
     let e = env(pool.clone()).await;
     contributor(&pool, 900, None).await;
     on_merge(&e.d, 4, 7, 900).await.unwrap();
-    assert_eq!(status(&pool).await, "PENDING_WALLET");
+    assert_eq!(status(&pool).await, PayoutStatus::PendingWallet);
     assert_eq!(e.notes.all(), ["Link your wallet at https://app.example/me to receive your payout."]);
 
     // the contributor links a wallet later
     let u = users::by_github_id(&pool, 900).await.unwrap().unwrap();
     users::set_wallet(&pool, &u.id, WINNER, Utc::now()).await.unwrap();
     assert_eq!(on_wallet_linked(&e.d, 900).await.unwrap(), 1);
-    assert_eq!(status(&pool).await, "QUEUED");
+    assert_eq!(status(&pool).await, PayoutStatus::Queued);
     assert_eq!(on_wallet_linked(&e.d, 900).await.unwrap(), 0, "nothing left waiting");
     assert_eq!(on_wallet_linked(&e.d, 12345).await.unwrap(), 0);
 }
@@ -203,7 +203,7 @@ async fn without_relayer_opt_in_the_maintainer_must_sign(pool: PgPool) {
     e.chain.put(4, BountyStatus::Open, false, None);
     contributor(&pool, 900, Some(WINNER)).await;
     on_merge(&e.d, 4, 7, 900).await.unwrap();
-    assert_eq!(status(&pool).await, "AWAITING_MAINTAINER");
+    assert_eq!(status(&pool).await, PayoutStatus::AwaitingMaintainer);
     assert_eq!(e.notes.all(), ["The maintainer must release this bounty at https://app.example/b/4."]);
     assert!(payouts::due(&pool, 10).await.unwrap().is_empty(), "the relayer never touches it");
 }
@@ -236,7 +236,7 @@ async fn a_winner_wallet_equal_to_the_maintainer_fails_the_payout(pool: PgPool) 
     contributor(&pool, 900, Some(MAINTAINER)).await;
     on_merge(&e.d, 4, 7, 900).await.unwrap();
     let p = payouts::for_bounty(&pool, 4).await.unwrap().unwrap();
-    assert_eq!((p.status.as_str(), p.last_error.as_deref()), ("FAILED", Some("winner is the maintainer")));
+    assert_eq!((p.status(), p.last_error.as_deref()), (PayoutStatus::Failed, Some("winner is the maintainer")));
 }
 
 #[sqlx::test(migrator = "MIGRATOR")]
@@ -266,7 +266,7 @@ async fn concurrent_advances_move_the_payout_exactly_once(pool: PgPool) {
 async fn queued(e: &Env) {
     contributor(&e.pool, 900, Some(WINNER)).await;
     on_merge(&e.d, 4, 7, 900).await.unwrap();
-    assert_eq!(status(&e.pool).await, "QUEUED");
+    assert_eq!(status(&e.pool).await, PayoutStatus::Queued);
 }
 
 #[sqlx::test(migrator = "MIGRATOR")]
@@ -275,7 +275,7 @@ async fn a_release_is_submitted_waited_on_and_confirmed_with_the_hash_stored_fir
     queued(&e).await;
     assert_eq!(relay_release(&e.d, &*e.signer, 4).await.unwrap(), RelayResult::Confirmed);
     let p = payouts::for_bounty(&pool, 4).await.unwrap().unwrap();
-    assert_eq!((p.status.as_str(), p.tx_hash.as_deref(), p.attempts), ("CONFIRMED", Some("hash-1"), 1));
+    assert_eq!((p.status(), p.tx_hash.as_deref(), p.attempts), (PayoutStatus::Confirmed, Some("hash-1"), 1));
     assert_eq!(*e.signer.submitted.lock().unwrap(), [(4, WINNER.to_string())]);
     assert_eq!(
         *e.signer.hash_in_db_during_wait.lock().unwrap(),
@@ -294,7 +294,7 @@ async fn a_crash_after_submitting_resumes_by_waiting_not_by_submitting_again(poo
     // the wait fails the first time (as if the process died mid-wait: we get an error and the row stays SUBMITTED)
     e.signer.waits.lock().unwrap().push_back(Err(ChainError::Http("timeout".into())));
     assert!(relay_release(&e.d, &*e.signer, 4).await.is_err());
-    assert_eq!(status(&pool).await, "SUBMITTED");
+    assert_eq!(status(&pool).await, PayoutStatus::Submitted);
     assert_eq!(relay_release(&e.d, &*e.signer, 4).await.unwrap(), RelayResult::Confirmed);
     assert_eq!(e.signer.submitted.lock().unwrap().len(), 1, "exactly one submission, ever");
     assert_eq!(*e.signer.waited.lock().unwrap(), ["hash-1", "hash-1"]);
@@ -307,7 +307,7 @@ async fn if_the_release_already_landed_the_chain_is_believed_and_nothing_is_subm
     e.chain.put(4, BountyStatus::Released, true, Some(WINNER));
     assert_eq!(relay_release(&e.d, &*e.signer, 4).await.unwrap(), RelayResult::Confirmed);
     assert!(e.signer.submitted.lock().unwrap().is_empty());
-    assert_eq!(status(&pool).await, "CONFIRMED");
+    assert_eq!(status(&pool).await, PayoutStatus::Confirmed);
 }
 
 #[sqlx::test(migrator = "MIGRATOR")]
@@ -327,7 +327,7 @@ async fn a_contract_rejection_fails_at_once_without_retrying(pool: PgPool) {
     e.signer.submits.lock().unwrap().push_back(Err(ChainError::Simulation("HostError: Error(Contract, #17)".into())));
     assert_eq!(relay_release(&e.d, &*e.signer, 4).await.unwrap(), RelayResult::Failed);
     let p = payouts::for_bounty(&pool, 4).await.unwrap().unwrap();
-    assert_eq!((p.status.as_str(), p.attempts, p.tx_hash), ("FAILED", 1, None));
+    assert_eq!((p.status(), p.attempts, p.tx_hash), (PayoutStatus::Failed, 1, None));
     assert!(p.last_error.unwrap().contains("#17"));
 }
 
@@ -339,12 +339,12 @@ async fn transient_failures_retry_then_give_up_after_the_limit(pool: PgPool) {
         e.signer.submits.lock().unwrap().push_back(Err(ChainError::Busy));
         let r = relay_release(&e.d, &*e.signer, 4).await;
         assert!(matches!(r, Err(PayoutError::Transient(_))), "attempt {attempt}");
-        assert_eq!(status(&pool).await, "QUEUED", "still retryable");
+        assert_eq!(status(&pool).await, PayoutStatus::Queued, "still retryable");
     }
     e.signer.submits.lock().unwrap().push_back(Err(ChainError::Busy));
     assert_eq!(relay_release(&e.d, &*e.signer, 4).await.unwrap(), RelayResult::Failed);
     let p = payouts::for_bounty(&pool, 4).await.unwrap().unwrap();
-    assert_eq!((p.status.as_str(), p.attempts), ("FAILED", MAX_ATTEMPTS));
+    assert_eq!((p.status(), p.attempts), (PayoutStatus::Failed, MAX_ATTEMPTS));
 }
 
 #[sqlx::test(migrator = "MIGRATOR")]
@@ -362,7 +362,7 @@ async fn a_just_submitted_transaction_that_is_not_visible_yet_is_waited_on_not_r
     queued(&e).await;
     e.signer.waits.lock().unwrap().push_back(Ok(TxOutcome::NotFound));
     assert!(matches!(relay_release(&e.d, &*e.signer, 4).await, Err(PayoutError::Transient(_))));
-    assert_eq!(status(&pool).await, "SUBMITTED");
+    assert_eq!(status(&pool).await, PayoutStatus::Submitted);
     assert_eq!(e.signer.submitted.lock().unwrap().len(), 1);
 }
 
@@ -377,7 +377,7 @@ async fn an_expired_unseen_transaction_is_resubmitted_only_when_the_chain_is_sti
     e.signer.waits.lock().unwrap().push_back(Ok(TxOutcome::NotFound));
     assert!(matches!(relay_release(&e.d, &*e.signer, 4).await, Err(PayoutError::Transient(_))));
     let p = payouts::for_bounty(&pool, 4).await.unwrap().unwrap();
-    assert_eq!((p.status.as_str(), p.tx_hash), ("QUEUED", None), "hash forgotten, ready to resubmit");
+    assert_eq!((p.status(), p.tx_hash), (PayoutStatus::Queued, None), "hash forgotten, ready to resubmit");
     assert_eq!(relay_release(&e.d, &*e.signer, 4).await.unwrap(), RelayResult::Confirmed);
     assert_eq!(e.signer.submitted.lock().unwrap().len(), 2);
 }
@@ -413,7 +413,7 @@ async fn a_pass_pays_queued_payouts_and_backs_off_failures(pool: PgPool) {
     // after the backoff: tried again and paid
     assert_eq!(relayer_pass(&e.d, &*e.signer, &mut retry, t0 + std::time::Duration::from_secs(60)).await.unwrap(), 1);
     assert!(retry.is_empty());
-    assert_eq!(status(&pool).await, "CONFIRMED");
+    assert_eq!(status(&pool).await, PayoutStatus::Confirmed);
     assert_eq!(
         relayer_pass(&e.d, &*e.signer, &mut retry, t0 + std::time::Duration::from_secs(120)).await.unwrap(),
         0,
@@ -452,6 +452,6 @@ async fn one_bad_payout_does_not_block_the_others(pool: PgPool) {
     e.signer.submits.lock().unwrap().push_back(Err(ChainError::Busy)); // the first one stumbles
     let mut retry = RetryTable::new();
     assert_eq!(relayer_pass(&e.d, &*e.signer, &mut retry, Instant::now()).await.unwrap(), 2);
-    let paid = payouts::by_status(&pool, "CONFIRMED", 10).await.unwrap();
+    let paid = payouts::by_status(&pool, PayoutStatus::Confirmed, 10).await.unwrap();
     assert_eq!(paid.len(), 1, "the second was paid despite the first failing");
 }

@@ -1,6 +1,6 @@
 use crate::ports::{Notifier, PayoutError};
 use escrow_chain::{ChainReader, ReleaseSigner, TxOutcome};
-use escrow_core::BountyStatus;
+use escrow_core::{BountyStatus, PayoutStatus};
 use escrow_db::{Db, payouts, users};
 use std::sync::Arc;
 
@@ -72,7 +72,7 @@ pub async fn advance(d: &PayoutDeps, bounty_id: i64) -> Result<Advance, PayoutEr
     let Some(p) = payouts::for_bounty(&d.db.pool, bounty_id).await? else {
         return Ok(Advance::NoPayout);
     };
-    if p.status() != escrow_core::PayoutStatus::PendingWallet {
+    if p.status() != PayoutStatus::PendingWallet {
         return Ok(Advance::AlreadyMoving(p.status));
     }
     let chain = d.chain.get_bounty(id_u64(bounty_id)).await?;
@@ -88,12 +88,12 @@ pub async fn advance(d: &PayoutDeps, bounty_id: i64) -> Result<Advance, PayoutEr
         payouts::mark_failed(&d.db.pool, &p.id, "winner is the maintainer", false).await?;
         return Ok(Advance::Failed);
     }
-    let next = if chain.relayer_allowed { "QUEUED" } else { "AWAITING_MAINTAINER" };
+    let next = if chain.relayer_allowed { PayoutStatus::Queued } else { PayoutStatus::AwaitingMaintainer };
     // guarded update: of several concurrent callers exactly one moves it out of PENDING_WALLET
     if !payouts::release_from_pending(&d.db.pool, &p.id, next, &wallet).await? {
         return Ok(Advance::Raced);
     }
-    if next == "AWAITING_MAINTAINER" {
+    if next == PayoutStatus::AwaitingMaintainer {
         say(d, bounty_id, p.pr_number, &format!("The maintainer must release this bounty at {}/b/{bounty_id}.", d.web_url)).await;
         return Ok(Advance::AwaitingMaintainer);
     }
@@ -116,9 +116,9 @@ pub async fn relay_release(d: &PayoutDeps, signer: &dyn ReleaseSigner, bounty_id
     let Some(p) = payouts::for_bounty(pool, bounty_id).await? else {
         return Err(PayoutError::Other(format!("no payout for bounty {bounty_id}")));
     };
-    match p.status.as_str() {
-        "CONFIRMED" => return Ok(RelayResult::Confirmed),
-        "FAILED" => return Ok(RelayResult::Failed),
+    match p.status() {
+        PayoutStatus::Confirmed => return Ok(RelayResult::Confirmed),
+        PayoutStatus::Failed => return Ok(RelayResult::Failed),
         _ => {}
     }
     let Some(winner) = p.winner_address.clone() else {
@@ -126,7 +126,7 @@ pub async fn relay_release(d: &PayoutDeps, signer: &dyn ReleaseSigner, bounty_id
     };
 
     // A hash we already submitted: check it instead of submitting again.
-    if p.status == "SUBMITTED"
+    if p.status() == PayoutStatus::Submitted
         && let Some(hash) = &p.tx_hash
     {
         return settle(d, signer, &p, &winner, hash).await;

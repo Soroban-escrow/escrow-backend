@@ -157,7 +157,7 @@ async fn a_release_closes_the_bounty_confirms_the_payout_and_finds_the_winner_by
         ("RELEASED", Some(win.as_str()), Some(900), Some(tx.as_str()))
     );
     let p = payouts::for_bounty(&pool, 4).await.unwrap().unwrap();
-    assert_eq!((p.status.as_str(), p.tx_hash.as_deref()), ("CONFIRMED", Some(tx.as_str())), "the chain's hash wins");
+    assert_eq!((p.status(), p.tx_hash.as_deref()), (PayoutStatus::Confirmed, Some(tx.as_str())), "the chain's hash wins");
     assert_eq!(count(&pool, &jobs_of("payout.announce")).await, 1);
     assert_eq!(count(&pool, &jobs_of("card.refresh")).await, 1, "two events for one bounty collapse into one refresh");
 }

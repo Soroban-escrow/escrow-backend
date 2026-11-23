@@ -629,7 +629,7 @@ async fn linking_a_wallet_continues_a_payout_that_was_waiting_for_it(pool: PgPoo
     )
     .await;
     let p = payouts::for_bounty(&pool, 4).await.unwrap().unwrap();
-    assert_eq!((p.status.as_str(), p.winner_address.as_deref()), ("QUEUED", Some(addr.as_str())));
+    assert_eq!((p.status(), p.winner_address.as_deref()), (PayoutStatus::Queued, Some(addr.as_str())));
 }
 
 #[sqlx::test(migrator = "MIGRATOR")]
@@ -1085,7 +1085,7 @@ async fn failed_payouts_can_be_listed_and_retried_but_not_when_a_transaction_exi
 
     let retry = call(&e.app, Method::POST, &format!("/admin/payouts/{}/retry", a.id), &admin.hdrs(true), None).await;
     assert_eq!(retry.status, StatusCode::OK);
-    assert_eq!(payouts::get(&pool, &a.id).await.unwrap().unwrap().status, "QUEUED");
+    assert_eq!(payouts::get(&pool, &a.id).await.unwrap().unwrap().status(), PayoutStatus::Queued);
     let blocked = call(&e.app, Method::POST, &format!("/admin/payouts/{}/retry", b.id), &admin.hdrs(true), None).await;
     assert_eq!((blocked.status, blocked.body["error"]["code"].clone()), (StatusCode::CONFLICT, json!("has_tx_hash")));
     assert_eq!(

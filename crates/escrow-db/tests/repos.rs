@@ -287,24 +287,24 @@ async fn payout_transitions_are_guarded(pool: PgPool) {
     let mut tasks = vec![];
     for _ in 0..8 {
         let (pool, id) = (pool.clone(), p.id.clone());
-        tasks.push(tokio::spawn(async move { payouts::release_from_pending(&pool, &id, "QUEUED", "GWIN").await.unwrap() }));
+        tasks.push(tokio::spawn(async move { payouts::release_from_pending(&pool, &id, PayoutStatus::Queued, "GWIN").await.unwrap() }));
     }
     let mut wins = 0;
     for t in tasks {
         wins += usize::from(t.await.unwrap());
     }
     assert_eq!(wins, 1, "exactly one caller moves it out of PENDING_WALLET");
-    assert!(!payouts::release_from_pending(&pool, &p.id, "AWAITING_MAINTAINER", "GOTHER").await.unwrap());
+    assert!(!payouts::release_from_pending(&pool, &p.id, PayoutStatus::AwaitingMaintainer, "GOTHER").await.unwrap());
 
     payouts::mark_submitted(&pool, &p.id, "hash1").await.unwrap();
     let s = payouts::get(&pool, &p.id).await.unwrap().unwrap();
-    assert_eq!((s.status.as_str(), s.tx_hash.as_deref(), s.attempts), ("SUBMITTED", Some("hash1"), 1));
+    assert_eq!((s.status(), s.tx_hash.as_deref(), s.attempts), (PayoutStatus::Submitted, Some("hash1"), 1));
     assert_eq!(payouts::due(&pool, 10).await.unwrap().len(), 1);
 
     // the chain says it landed (maybe via another path): payout is confirmed with the chain's hash
     assert_eq!(payouts::confirm_from_chain(&pool, 4, "chainhash", "GWIN").await.unwrap(), 1);
     let c = payouts::get(&pool, &p.id).await.unwrap().unwrap();
-    assert_eq!((c.status.as_str(), c.tx_hash.as_deref()), ("CONFIRMED", Some("chainhash")));
+    assert_eq!((c.status(), c.tx_hash.as_deref()), (PayoutStatus::Confirmed, Some("chainhash")));
     assert_eq!(payouts::confirm_from_chain(&pool, 4, "again", "GWIN").await.unwrap(), 0, "confirming twice changes nothing");
     assert!(payouts::due(&pool, 10).await.unwrap().is_empty());
 }
@@ -321,7 +321,7 @@ async fn admin_retry_refuses_a_payout_that_has_a_transaction(pool: PgPool) {
     payouts::mark_failed(&pool, &b.id, "later failure", false).await.unwrap();
     assert!(payouts::retry_failed(&pool, &a.id).await.unwrap());
     assert!(!payouts::retry_failed(&pool, &b.id).await.unwrap(), "must verify the submitted tx on chain instead");
-    assert_eq!(payouts::get(&pool, &a.id).await.unwrap().unwrap().status, "QUEUED");
+    assert_eq!(payouts::get(&pool, &a.id).await.unwrap().unwrap().status(), PayoutStatus::Queued);
 }
 
 #[sqlx::test(migrator = "MIGRATOR")]
