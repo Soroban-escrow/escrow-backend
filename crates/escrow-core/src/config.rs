@@ -267,6 +267,9 @@ impl Config {
         if !relayer_channel_secrets.is_empty() && (relayer_secret.is_none() || network == Network::Mainnet) {
             r.errors.push("RELAYER_CHANNEL_SECRETS: needs RELAYER_SECRET, and is not supported on mainnet yet".into());
         }
+        if network == Network::Mainnet && r.raw("METRICS_TOKEN").is_none() {
+            r.errors.push("METRICS_TOKEN: required on mainnet; /metrics exposes bounty, payout and queue state".into());
+        }
 
         let shared_rate_limits = match r.string("RATE_LIMIT_STORE", "memory").as_str() {
             "postgres" => true,
@@ -492,10 +495,16 @@ mod tests {
     fn mainnet_makes_you_choose_an_rpc_provider() {
         let e = Config::from_map(&with(&[("STELLAR_NETWORK", "mainnet")])).unwrap_err().to_string();
         assert!(e.contains("STELLAR_RPC_URL: required"), "{e}");
-        let c = Config::from_map(&with(&[("STELLAR_NETWORK", "mainnet"), ("STELLAR_RPC_URL", "https://rpc.example/")])).unwrap();
+        let c = Config::from_map(&with(&[("STELLAR_NETWORK", "mainnet"), ("STELLAR_RPC_URL", "https://rpc.example/"), ("METRICS_TOKEN", "tok")])).unwrap();
         assert_eq!(c.rpc_url, "https://rpc.example");
         assert_eq!(c.network_passphrase, "Public Global Stellar Network ; September 2015");
         assert!(c.explorer_tx_template.contains("/explorer/public/"));
+    }
+
+    #[test]
+    fn mainnet_requires_a_metrics_token() {
+        let e = Config::from_map(&with(&[("STELLAR_NETWORK", "mainnet"), ("STELLAR_RPC_URL", "https://rpc.example/")])).unwrap_err().to_string();
+        assert!(e.contains("METRICS_TOKEN"), "{e}");
     }
 
     #[test]

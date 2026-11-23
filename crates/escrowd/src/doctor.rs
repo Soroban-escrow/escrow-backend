@@ -269,6 +269,14 @@ pub async fn run(cfg: Config, as_json: bool) -> Result<()> {
     } else {
         r.ok("urls", format!("{} / {}", cfg.api_public_url, cfg.web_public_url));
     }
+    if cfg.metrics_token.is_none() {
+        r.add(
+            Status::Warn,
+            "metrics",
+            "METRICS_TOKEN is unset: /metrics is served without authentication",
+            Some("Set METRICS_TOKEN; on mainnet it is required."),
+        );
+    }
     if cfg.admin_github_ids.is_empty() {
         r.add(
             Status::Warn,
