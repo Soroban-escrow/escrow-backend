@@ -86,6 +86,7 @@ fn env_with_lag(pool: PgPool, with_login: bool, admins: Vec<i64>, check_indexer_
             secure_cookies: false,
             admin_github_ids: admins,
             trust_proxy: false,
+            proxy_hops: 1,
             metrics_token: None,
             explorer_tx_template: "https://explorer.example/tx/{hash}".into(),
             tokens: Tokens { usdc: "CUSDC".into(), xlm: "CTOKEN".into() },

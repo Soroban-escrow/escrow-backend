@@ -35,20 +35,31 @@ const GLOBAL_PER_MINUTE: u32 = 300;
 const BODY_LIMIT: usize = 1 << 20;
 const WEBHOOK_BODY_LIMIT: usize = 10 << 20;
 
-fn client_ip(req: &Request, trust_proxy: bool) -> String {
-    if trust_proxy && let Some(first) = req.headers().get("x-forwarded-for").and_then(|v| v.to_str().ok()).and_then(|v| v.split(',').next())
+/// The client address in an `X-Forwarded-For` value. Proxies append on the right, so with `hops`
+/// trusted proxies in front the client is the entry `hops` from the right; everything further left
+/// is whatever the client sent and is ignored. `None` when the header is too short to trust.
+fn xff_client_ip(xff: &str, hops: usize) -> Option<String> {
+    if hops == 0 {
+        return None;
+    }
+    let parts: Vec<&str> = xff.split(',').map(str::trim).filter(|p| !p.is_empty()).collect();
+    let ip = parts.get(parts.len().checked_sub(hops)?)?;
+    (ip.len() <= 45).then(|| (*ip).to_string())
+}
+
+fn client_ip(req: &Request, trust_proxy: bool, proxy_hops: usize) -> String {
+    if trust_proxy
+        && let Some(xff) = req.headers().get("x-forwarded-for").and_then(|v| v.to_str().ok())
+        && let Some(ip) = xff_client_ip(xff, proxy_hops)
     {
-        let ip = first.trim();
-        if !ip.is_empty() && ip.len() <= 45 {
-            return ip.to_string();
-        }
+        return ip;
     }
     req.extensions().get::<ConnectInfo<SocketAddr>>().map_or_else(|| "unknown".into(), |c| c.0.ip().to_string())
 }
 
 /// Resolves the caller's address, counts the request, and applies the per-address ceiling (health checks are exempt).
 async fn edge(axum::extract::State(s): axum::extract::State<AppState>, mut req: Request, next: Next) -> Response {
-    let ip = client_ip(&req, s.cfg.trust_proxy);
+    let ip = client_ip(&req, s.cfg.trust_proxy, s.cfg.proxy_hops as usize);
     Metrics::inc(&s.metrics.http_requests);
     if req.uri().path() != "/health"
         && !limiter::check_shared(&s.db.pool, &s.limiter, &format!("g:{ip}"), GLOBAL_PER_MINUTE, Instant::now()).await
@@ -137,4 +148,21 @@ pub async fn serve(
     shutdown: impl std::future::Future<Output = ()> + Send + 'static,
 ) -> std::io::Result<()> {
     axum::serve(listener, router(state).into_make_service_with_connect_info::<SocketAddr>()).with_graceful_shutdown(shutdown).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::xff_client_ip;
+
+    #[test]
+    fn the_client_is_counted_from_the_right_past_the_trusted_proxies() {
+        // one trusted proxy: the right-most entry is what it observed; the spoofed left-most is ignored
+        assert_eq!(xff_client_ip("1.2.3.4, 203.0.113.9", 1).as_deref(), Some("203.0.113.9"));
+        // two trusted proxies: skip the inner proxy's entry too
+        assert_eq!(xff_client_ip("9.9.9.9, 203.0.113.9, 10.0.0.1", 2).as_deref(), Some("203.0.113.9"));
+        // a header shorter than the trusted chain cannot be trusted
+        assert_eq!(xff_client_ip("203.0.113.9", 2), None);
+        assert_eq!(xff_client_ip("", 1), None);
+        assert_eq!(xff_client_ip("anything", 0), None);
+    }
 }

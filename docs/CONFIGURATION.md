@@ -26,6 +26,7 @@ Secrets never appear in logs or `Debug` output.
 | `API_PUBLIC_URL` | `http://localhost:3001` | Where browsers and GitHub reach the API. **Must be `https://` in production**: it decides whether cookies are `Secure`, and is the OAuth callback base (`{API_PUBLIC_URL}/auth/callback`). |
 | `WEB_PUBLIC_URL` | `http://localhost:3000` | The web app. The only CORS origin; where sign-in returns to; used in links the bot posts. |
 | `TRUST_PROXY` | off | `1`/`true` only behind a reverse proxy you control: then `X-Forwarded-For` identifies callers for rate limiting. Left off, the header is ignored, so it cannot be used to dodge limits. |
+| `TRUSTED_PROXY_HOPS` | `1` | With `TRUST_PROXY` on: how many trusted proxies append to `X-Forwarded-For`. The client address is read this many entries from the right, so entries a client prepends cannot dodge per-IP limits. |
 | `METRICS_TOKEN` | none | When set, `/metrics` needs `Authorization: Bearer <token>`. |
 
 ## Stellar

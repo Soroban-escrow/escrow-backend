@@ -17,6 +17,8 @@ pub struct ApiConfig {
     pub secure_cookies: bool,
     pub admin_github_ids: Vec<i64>,
     pub trust_proxy: bool,
+    /// Trusted reverse proxies in front of the API; the client IP is read this many XFF entries from the right.
+    pub proxy_hops: u32,
     pub metrics_token: Option<String>,
     pub explorer_tx_template: String,
     pub tokens: Tokens,

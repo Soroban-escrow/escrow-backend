@@ -227,6 +227,7 @@ impl Runtime {
                 secure_cookies: c.secure_cookies(),
                 admin_github_ids: c.admin_github_ids.clone(),
                 trust_proxy: c.trust_proxy,
+                proxy_hops: c.trusted_proxy_hops,
                 metrics_token: c.metrics_token.clone(),
                 explorer_tx_template: c.explorer_tx_template.clone(),
                 tokens: self.tokens(),
