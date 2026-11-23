@@ -60,6 +60,14 @@ pub async fn get_for_update(conn: &mut PgConnection, id: i64) -> Result<Option<B
         .await
 }
 
+/// Bounties by id, unordered — the batch counterpart of [`get`] for list views.
+pub async fn list_by_ids<'e>(ex: impl PgExecutor<'e>, ids: &[i64]) -> Result<Vec<Bounty>, sqlx::Error> {
+    sqlx::query_as(sqlx::AssertSqlSafe(format!("SELECT {BOUNTY_COLS} FROM bounties WHERE id = ANY($1)")))
+        .bind(ids)
+        .fetch_all(ex)
+        .await
+}
+
 pub async fn with_repo<'e>(ex: impl PgExecutor<'e> + Copy, id: i64) -> Result<Option<(Bounty, Repo)>, sqlx::Error> {
     let Some(b) = get(ex, id).await? else {
         return Ok(None);

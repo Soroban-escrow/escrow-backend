@@ -2,7 +2,7 @@
 
 use crate::models::{AiReview, Bounty, PullRequest};
 use chrono::{DateTime, Utc};
-use sqlx::PgExecutor;
+use sqlx::{FromRow, PgExecutor};
 
 const COLS: &str = "id, number, author_github_id, author_login, head_sha, state, merged_at, diff_hash";
 
@@ -64,6 +64,27 @@ pub async fn for_bounty<'e>(ex: impl PgExecutor<'e>, bounty_id: i64) -> Result<V
          FROM pull_requests p JOIN pull_request_bounties l ON l.pr_id = p.id WHERE l.bounty_id = $1 ORDER BY p.id",
     )
     .bind(bounty_id)
+    .fetch_all(ex)
+    .await
+}
+
+/// PRs linked to any of the given bounties, ordered by bounty then PR id — the batch
+/// counterpart of [`for_bounty`].
+#[derive(Debug, FromRow)]
+pub struct LinkedPr {
+    pub bounty_id: i64,
+    #[sqlx(flatten)]
+    pub pr: PullRequest,
+}
+
+/// PRs linked to any of the given bounties, ordered by bounty then PR id — the batch
+/// counterpart of [`for_bounty`].
+pub async fn for_bounties<'e>(ex: impl PgExecutor<'e>, bounty_ids: &[i64]) -> Result<Vec<LinkedPr>, sqlx::Error> {
+    sqlx::query_as(
+        "SELECT l.bounty_id, p.id, p.number, p.author_github_id, p.author_login, p.head_sha, p.state, p.merged_at, p.diff_hash
+         FROM pull_requests p JOIN pull_request_bounties l ON l.pr_id = p.id WHERE l.bounty_id = ANY($1) ORDER BY l.bounty_id, p.id",
+    )
+    .bind(bounty_ids)
     .fetch_all(ex)
     .await
 }

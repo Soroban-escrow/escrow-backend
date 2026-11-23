@@ -53,6 +53,17 @@ pub async fn all_for_bounty<'e>(ex: impl PgExecutor<'e>, bounty_id: i64) -> Resu
         .await
 }
 
+/// Payouts for any of the given bounties, ordered by bounty then creation — the batch
+/// counterpart of [`all_for_bounty`].
+pub async fn all_for_bounties<'e>(ex: impl PgExecutor<'e>, bounty_ids: &[i64]) -> Result<Vec<Payout>, sqlx::Error> {
+    sqlx::query_as(sqlx::AssertSqlSafe(format!(
+        "SELECT {COLS} FROM payouts WHERE bounty_id = ANY($1) ORDER BY bounty_id, created_at"
+    )))
+    .bind(bounty_ids)
+    .fetch_all(ex)
+    .await
+}
+
 /// Moves PENDING_WALLET forward. Guarded: of several concurrent callers exactly one gets `true`.
 pub async fn release_from_pending<'e>(ex: impl PgExecutor<'e>, id: &str, status: &str, address: &str) -> Result<bool, sqlx::Error> {
     sqlx::query("UPDATE payouts SET status = $2, winner_address = $3, updated_at = now() WHERE id = $1 AND status = 'PENDING_WALLET'")

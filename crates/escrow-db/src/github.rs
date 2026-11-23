@@ -87,6 +87,13 @@ pub async fn get_repo<'e>(ex: impl PgExecutor<'e>, id: i64) -> Result<Option<Rep
     sqlx::query_as("SELECT id, installation_id, full_name, is_private FROM repos WHERE id = $1").bind(id).fetch_optional(ex).await
 }
 
+pub async fn repos_by_ids<'e>(ex: impl PgExecutor<'e>, ids: &[i64]) -> Result<Vec<Repo>, sqlx::Error> {
+    sqlx::query_as("SELECT id, installation_id, full_name, is_private FROM repos WHERE id = ANY($1)")
+        .bind(ids)
+        .fetch_all(ex)
+        .await
+}
+
 pub async fn list_repos<'e>(ex: impl PgExecutor<'e>) -> Result<Vec<Repo>, sqlx::Error> {
     sqlx::query_as("SELECT id, installation_id, full_name, is_private FROM repos ORDER BY full_name").fetch_all(ex).await
 }

@@ -21,6 +21,16 @@ pub async fn latest_for_pr<'e>(ex: impl PgExecutor<'e>, pr_id: i64) -> Result<Ve
         .await
 }
 
+/// The latest review per PR across a set of PRs — the batch counterpart of [`latest_for_pr`].
+pub async fn latest_for_prs<'e>(ex: impl PgExecutor<'e>, pr_ids: &[i64]) -> Result<Vec<AiReview>, sqlx::Error> {
+    sqlx::query_as(sqlx::AssertSqlSafe(format!(
+        "SELECT DISTINCT ON (pr_id) {COLS} FROM ai_reviews WHERE pr_id = ANY($1) ORDER BY pr_id, created_at DESC"
+    )))
+    .bind(pr_ids)
+    .fetch_all(ex)
+    .await
+}
+
 /// The newest review that already has a GitHub comment: the one to edit in place.
 pub async fn latest_commented<'e>(ex: impl PgExecutor<'e>, pr_id: i64) -> Result<Option<AiReview>, sqlx::Error> {
     sqlx::query_as(sqlx::AssertSqlSafe(format!(

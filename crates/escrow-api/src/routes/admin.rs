@@ -7,7 +7,7 @@ use crate::{
     extract::{ApiJson, ClientIp},
     routes::{
         auth::mutation_limit,
-        public::{Detail, detail_of},
+        public::{self, Detail},
     },
     session::{Authed, require_user},
     state::AppState,
@@ -68,10 +68,13 @@ pub async fn list_disputes(
 ) -> ApiResult<Json<Vec<DisputeView>>> {
     admin(&s, &headers, &ip, false).await?;
     let now = (s.now)();
+    let list = disputes::list_open(&s.db.pool).await?;
+    let ids: Vec<i64> = list.iter().map(|d| d.bounty_id).collect();
+    let mut details = public::details_many(&s, &ids).await?;
     let mut out = vec![];
-    for d in disputes::list_open(&s.db.pool).await? {
+    for d in list {
         let overdue = now - d.created_at > Duration::hours(OVERDUE_HOURS);
-        out.push(DisputeView { bounty: detail_of(&s, d.bounty_id).await?, dispute: d, overdue });
+        out.push(DisputeView { bounty: details.remove(&d.bounty_id), dispute: d, overdue });
     }
     Ok(Json(out))
 }

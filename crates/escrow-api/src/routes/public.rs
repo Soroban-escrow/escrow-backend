@@ -193,6 +193,48 @@ pub async fn detail_of(s: &AppState, id: i64) -> ApiResult<Option<Detail>> {
     Ok(Some(Detail { bounty, repo: RepoName { full_name: repo.full_name }, prs: views, payouts }))
 }
 
+/// [`detail_of`] for a set of bounties in a fixed number of queries — the batch path list views use.
+pub async fn details_many(s: &AppState, ids: &[i64]) -> ApiResult<std::collections::HashMap<i64, Detail>> {
+    use std::collections::HashMap;
+    let rows = bounties::list_by_ids(&s.db.pool, ids).await?;
+    let repo_ids: Vec<i64> = rows.iter().map(|b| b.repo_id).collect();
+    let repos: HashMap<i64, _> = escrow_db::github::repos_by_ids(&s.db.pool, &repo_ids).await?.into_iter().map(|r| (r.id, r)).collect();
+
+    let linked = prs::for_bounties(&s.db.pool, ids).await?;
+    let pr_ids: Vec<i64> = linked.iter().map(|l| l.pr.id).collect();
+    let latest = reviews::latest_for_prs(&s.db.pool, &pr_ids).await?;
+    let mut reviews_by_pr: HashMap<i64, Vec<AiReview>> = HashMap::new();
+    for r in latest {
+        reviews_by_pr.entry(r.pr_id).or_default().push(r);
+    }
+    let mut prs_by_bounty: HashMap<i64, Vec<PrView>> = HashMap::new();
+    for l in linked {
+        let reviews = reviews_by_pr.remove(&l.pr.id).unwrap_or_default();
+        prs_by_bounty.entry(l.bounty_id).or_default().push(PrView { pr: l.pr, reviews });
+    }
+
+    let mut payouts_by_bounty: HashMap<i64, Vec<Payout>> = HashMap::new();
+    for p in payouts::all_for_bounties(&s.db.pool, ids).await? {
+        payouts_by_bounty.entry(p.bounty_id).or_default().push(p);
+    }
+
+    let mut out = HashMap::new();
+    for b in rows {
+        let id = b.id;
+        let repo = repos.get(&b.repo_id).ok_or(sqlx::Error::RowNotFound)?;
+        out.insert(
+            id,
+            Detail {
+                bounty: b,
+                repo: RepoName { full_name: repo.full_name.clone() },
+                prs: prs_by_bounty.remove(&id).unwrap_or_default(),
+                payouts: payouts_by_bounty.remove(&id).unwrap_or_default(),
+            },
+        );
+    }
+    Ok(out)
+}
+
 pub async fn get_bounty(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<Json<Detail>> {
     if !digits(&id, 18) {
         return Err(ApiError::not_found("bounty"));
