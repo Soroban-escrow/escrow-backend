@@ -1192,6 +1192,20 @@ async fn a_correctly_signed_but_malformed_delivery_is_a_400(pool: PgPool) {
     assert_eq!(e.app.clone().oneshot(no_headers).await.unwrap().status(), StatusCode::BAD_REQUEST);
 }
 
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn over_long_webhook_headers_count_as_rejected(pool: PgPool) {
+    let e = env(pool, true, vec![]);
+    let body = "{}";
+    let long_id = "d".repeat(101);
+    let r = deliver(&e, &long_id, "issue_comment", body, Some(sign_body(body))).await;
+    assert_eq!((r.status, r.body["error"]["code"].clone()), (StatusCode::BAD_REQUEST, json!("bad_request")));
+    let long_event = "e".repeat(61);
+    let r = deliver(&e, "d-short", &long_event, body, Some(sign_body(body))).await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST);
+    let m = get(&e, "/metrics").await;
+    assert!(m.text.contains("skillescrow_webhooks_rejected_total 2"), "{}", m.text);
+}
+
 // ================= limits =================
 
 #[sqlx::test(migrator = "MIGRATOR")]

@@ -28,6 +28,7 @@ pub async fn receive(State(s): State<AppState>, headers: HeaderMap, body: Bytes)
         return Err(ApiError::bad_request("missing delivery headers"));
     };
     if id.len() > 100 || event.len() > 60 {
+        Metrics::inc(&s.metrics.webhooks_rejected);
         return Err(ApiError::bad_request("delivery headers are too long"));
     }
     let payload: serde_json::Value = serde_json::from_slice(&body).map_err(|_| {
