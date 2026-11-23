@@ -194,14 +194,22 @@ impl IssueCommenter for GithubCommenter {
 
 /// Refund reminders: one 48 h before the refund window opens (deadline + grace), one when it opens.
 /// Each is sent at most once, recorded in the audit log AFTER the comment succeeds (a failed comment is retried next tick).
+/// What one reminder pass did: `sent` entries look like `"soon:12"`/`"open:12"`, `failed` pairs a
+/// bounty id with the comment error so one bad repository cannot stall every later reminder.
+#[derive(Debug, Default)]
+pub struct ReminderOutcome {
+    pub sent: Vec<String>,
+    pub failed: Vec<(i64, String)>,
+}
+
 pub async fn send_refund_reminders(
     db: &Db,
     commenter: &dyn IssueCommenter,
     grace: Duration,
     web_url: &str,
     now: DateTime<Utc>,
-) -> Result<Vec<String>, EngineError> {
-    let mut sent = vec![];
+) -> Result<ReminderOutcome, EngineError> {
+    let mut out = ReminderOutcome::default();
     for b in bounties::open_ones(&db.pool).await? {
         let opens_at = b.deadline + grace;
         let kind = if now >= opens_at {
@@ -225,11 +233,15 @@ pub async fn send_refund_reminders(
                 "The refund window for this bounty is now open. The maintainer can reclaim the funds at {web_url}/me. A merged PR can still be released until then."
             )
         };
-        commenter.comment(b.id, &body).await?;
+        if let Err(e) = commenter.comment(b.id, &body).await {
+            tracing::warn!(bounty = b.id, error = %e, "refund reminder comment failed");
+            out.failed.push((b.id, e.to_string()));
+            continue;
+        }
         audit::log(&db.pool, "system", &action, &target, &serde_json::json!({})).await?;
-        sent.push(format!("{kind}:{}", b.id));
+        out.sent.push(format!("{kind}:{}", b.id));
     }
-    Ok(sent)
+    Ok(out)
 }
 
 /// Wallet reminder stages after a PR merge while its payout waits for a wallet: name and hours after the merge.
