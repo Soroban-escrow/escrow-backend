@@ -60,7 +60,7 @@ pub async fn upsert_repo<'e>(
 ) -> Result<(), sqlx::Error> {
     sqlx::query(
         "INSERT INTO repos (id, installation_id, full_name, is_private) VALUES ($1,$2,$3,$4)
-         ON CONFLICT (id) DO UPDATE SET installation_id = EXCLUDED.installation_id, full_name = EXCLUDED.full_name, is_private = EXCLUDED.is_private",
+         ON CONFLICT (id) DO UPDATE SET installation_id = EXCLUDED.installation_id, full_name = EXCLUDED.full_name, is_private = EXCLUDED.is_private, removed_at = NULL",
     )
     .bind(id)
     .bind(installation_id)
@@ -69,6 +69,18 @@ pub async fn upsert_repo<'e>(
     .execute(ex)
     .await
     .map(|_| ())
+}
+
+/// Marks a repository as removed from its installation. The row stays (bounties reference it);
+/// `removed_at` blocks new bounty creation until the repo is re-added.
+pub async fn suspend_repo<'e>(ex: impl PgExecutor<'e>, id: i64) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE repos SET removed_at = now() WHERE id = $1").bind(id).execute(ex).await.map(|_| ())
+}
+
+/// Whether the repository was removed from its installation.
+pub async fn repo_removed<'e>(ex: impl PgExecutor<'e>, id: i64) -> Result<bool, sqlx::Error> {
+    let v: Option<bool> = sqlx::query_scalar("SELECT removed_at IS NOT NULL FROM repos WHERE id = $1").bind(id).fetch_optional(ex).await?;
+    Ok(v.unwrap_or(false))
 }
 
 pub async fn get_repo<'e>(ex: impl PgExecutor<'e>, id: i64) -> Result<Option<Repo>, sqlx::Error> {

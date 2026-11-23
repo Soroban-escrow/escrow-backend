@@ -90,6 +90,9 @@ pub trait GithubApi: Send + Sync {
     async fn get_issue(&self, installation: i64, repo: &str, issue: i32) -> Result<Issue, GithubError>;
     /// Creates the label if needed and sets it on the issue, replacing earlier `bounty:` labels.
     async fn set_bounty_label(&self, installation: i64, repo: &str, issue: i32, label: &str) -> Result<(), GithubError>;
+    /// Removes every `bounty:` label from the issue. Used when a bounty reaches a terminal state
+    /// (released, refunded, resolved) so label searches stop listing it as open.
+    async fn clear_bounty_label(&self, installation: i64, repo: &str, issue: i32) -> Result<(), GithubError>;
     async fn get_pull(&self, installation: i64, repo: &str, pr: i32) -> Result<Pull, GithubError>;
     async fn get_pull_files(&self, installation: i64, repo: &str, pr: i32) -> Result<Vec<PullFile>, GithubError>;
     async fn get_ci_conclusion(&self, installation: i64, repo: &str, sha: &str) -> Result<CiConclusion, GithubError>;

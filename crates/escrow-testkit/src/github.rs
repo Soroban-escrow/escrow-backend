@@ -162,6 +162,14 @@ impl GithubApi for FakeGithub {
         Ok(())
     }
 
+    async fn clear_bounty_label(&self, _i: i64, repo: &str, issue: i32) -> Result<(), GithubError> {
+        self.enter("clear_bounty_label").await?;
+        self.with(|s| {
+            s.labels.retain(|(r, i, l)| !(r == repo && *i == issue && l.starts_with("bounty:")));
+        });
+        Ok(())
+    }
+
     async fn get_pull(&self, _i: i64, repo: &str, pr: i32) -> Result<Pull, GithubError> {
         self.enter("get_pull").await?;
         self.with(|s| s.pulls.get(&(repo.to_string(), pr)).cloned()).ok_or(GithubError::Status { status: 404, what: "pull".into() })

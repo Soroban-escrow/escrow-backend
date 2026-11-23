@@ -47,6 +47,9 @@ impl GithubApi for NoGithub {
     async fn set_bounty_label(&self, _i: i64, _r: &str, _n: i32, _l: &str) -> Result<(), GithubError> {
         Err(GithubError::NotConfigured)
     }
+    async fn clear_bounty_label(&self, _i: i64, _r: &str, _n: i32) -> Result<(), GithubError> {
+        Err(GithubError::NotConfigured)
+    }
     async fn get_pull(&self, _i: i64, _r: &str, _n: i32) -> Result<Pull, GithubError> {
         Err(GithubError::NotConfigured)
     }

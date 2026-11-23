@@ -134,6 +134,10 @@ pub async fn handle_issue_comment(d: &CommandDeps, ev: &IssueCommentEvent) -> Re
                 reply("This issue already has an active bounty.".into()).await?;
                 return Ok("rejected:active".into());
             }
+            if github::repo_removed(&d.db.pool, ev.repository.id).await? {
+                reply("Bounties cannot be created on a repository that was removed from the installation.".into()).await?;
+                return Ok("rejected:repo-removed".into());
+            }
             let Some(address) = d.tokens.address(token) else {
                 reply(format!("{} bounties are not enabled on this deployment.", token.as_str())).await?;
                 return Ok("rejected:token".into());

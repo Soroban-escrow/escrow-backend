@@ -446,6 +446,26 @@ impl GithubApi for GithubClient {
         .map(|_| ())
     }
 
+    async fn clear_bounty_label(&self, installation: i64, repo: &str, issue: i32) -> Result<(), GithubError> {
+        let repo = repo_ok(repo)?;
+        let issue = positive(issue.into(), "issue")?;
+        #[derive(Deserialize)]
+        struct L {
+            name: String,
+        }
+        let existing: Vec<L> =
+            self.json(installation, reqwest::Method::GET, &format!("/repos/{repo}/issues/{issue}/labels?per_page=100"), None).await?;
+        for l in existing.iter().filter(|l| l.name.starts_with("bounty:")) {
+            let enc = l
+                .name
+                .bytes()
+                .map(|b| if b.is_ascii_alphanumeric() || b"-_.~".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") })
+                .collect::<String>();
+            self.call(installation, reqwest::Method::DELETE, &format!("/repos/{repo}/issues/{issue}/labels/{enc}"), None).await?;
+        }
+        Ok(())
+    }
+
     async fn get_pull(&self, installation: i64, repo: &str, pr: i32) -> Result<Pull, GithubError> {
         let path = format!("/repos/{}/pulls/{}", repo_ok(repo)?, positive(pr.into(), "pull request")?);
         self.json(installation, reqwest::Method::GET, &path, None).await
