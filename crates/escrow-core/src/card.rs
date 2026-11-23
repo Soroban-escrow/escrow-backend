@@ -3,6 +3,14 @@
 use crate::{amounts::display, status::BountyStatus};
 use chrono::{DateTime, Utc};
 
+/// Maximum number of criteria rendered on the bounty card.
+pub const MAX_CARD_CRITERIA: usize = 25;
+
+/// Maximum character length of each rendered criterion before truncation with an ellipsis.
+pub const MAX_CRITERION_LEN: usize = 200;
+
+/// Maximum character length guaranteed for the rendered card comment body (well below GitHub's 65,536 limit).
+pub const MAX_CARD_BODY_LEN: usize = 16_384;
 pub struct CardInput<'a> {
     pub id: i64,
     pub status: BountyStatus,
@@ -60,7 +68,21 @@ pub fn render_card(c: &CardInput<'_>) -> String {
     if !c.criteria.is_empty() {
         lines.push(String::new());
         lines.push("**Acceptance criteria**".into());
-        lines.extend(c.criteria.iter().map(|x| format!("- {}", esc(x))));
+        let total = c.criteria.len();
+        let rendered_count = total.min(MAX_CARD_CRITERIA);
+        for item in &c.criteria[..rendered_count] {
+            let escaped = esc(item);
+            let truncated = if escaped.chars().count() > MAX_CRITERION_LEN {
+                let shortened: String = escaped.chars().take(MAX_CRITERION_LEN).collect();
+                format!("{shortened}…")
+            } else {
+                escaped
+            };
+            lines.push(format!("- {truncated}"));
+        }
+        if total > rendered_count {
+            lines.push(format!("*…and {} more*", total - rendered_count));
+        }
     }
     if c.status == BountyStatus::Open {
         lines.push(String::new());
@@ -71,7 +93,15 @@ pub fn render_card(c: &CardInput<'_>) -> String {
     }
     lines.push(String::new());
     lines.push(format!("[Bounty details]({}/b/{})", c.web_url, c.id));
-    lines.join("\n")
+    let rendered = lines.join("\n");
+    if rendered.chars().count() > MAX_CARD_BODY_LEN {
+        let footer = format!("\n\n[Bounty details]({}/b/{})", c.web_url, c.id);
+        let budget = MAX_CARD_BODY_LEN.saturating_sub(footer.chars().count() + 1);
+        let prefix: String = rendered.chars().take(budget).collect();
+        format!("{prefix}…{footer}")
+    } else {
+        rendered
+    }
 }
 
 /// The issue label, e.g. `bounty: 50 USDC`.
@@ -181,5 +211,16 @@ mod tests {
     fn label_matches_the_convention() {
         assert_eq!(label_for(500_000_000, "USDC"), "bounty: 50 USDC");
         assert_eq!(label_for(55_000_000, "XLM"), "bounty: 5.5 XLM");
+    }
+
+    #[test]
+    fn card_caps_criteria_count_and_item_length() {
+        let long_item = "a".repeat(500);
+        let crit: Vec<String> = (0..1000).map(|i| format!("Criterion {i}: {long_item}")).collect();
+        let card = render_card(&input(BountyStatus::Open, &crit));
+
+        assert!(card.len() <= MAX_CARD_BODY_LEN, "card length {} must be <= {}", card.len(), MAX_CARD_BODY_LEN);
+        assert!(card.contains(&format!("*…and {} more*", 1000 - MAX_CARD_CRITERIA)));
+        assert!(card.contains("[Bounty details](https://app.example/b/4)"));
     }
 }
