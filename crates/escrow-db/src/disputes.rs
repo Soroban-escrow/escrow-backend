@@ -15,6 +15,16 @@ pub async fn create<'e>(ex: impl PgExecutor<'e>, bounty_id: i64, opened_by: i64,
     .await
 }
 
+
+/// Find an active dispute ('requested' or 'opened_onchain') on a bounty if one exists.
+pub async fn find_open_for_bounty<'e>(ex: impl PgExecutor<'e>, bounty_id: i64) -> Result<Option<Dispute>, sqlx::Error> {
+    sqlx::query_as(sqlx::AssertSqlSafe(format!(
+        "SELECT {COLS} FROM disputes WHERE bounty_id =  AND status IN ('requested','opened_onchain')"
+    )))
+    .bind(bounty_id)
+    .fetch_optional(ex)
+    .await
+}
 pub async fn get<'e>(ex: impl PgExecutor<'e>, id: &str) -> Result<Option<Dispute>, sqlx::Error> {
     sqlx::query_as(sqlx::AssertSqlSafe(format!("SELECT {COLS} FROM disputes WHERE id = $1"))).bind(id).fetch_optional(ex).await
 }

@@ -573,3 +573,21 @@ async fn the_card_lock_serialises_concurrent_refreshes(pool: PgPool) {
     }
     assert_eq!(posted.load(std::sync::atomic::Ordering::SeqCst), 1, "exactly one card is posted");
 }
+
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn at_most_one_active_dispute_can_exist_per_bounty(pool: PgPool) {
+    seed_repo(&pool).await;
+    bounty(&pool, 4, 3, 100, 14).await;
+    let d1 = disputes::create(&pool, 4, 100, "first issue").await.unwrap();
+    assert_eq!(d1.status, "requested");
+
+    // A second active dispute fails with a unique violation
+    let err = disputes::create(&pool, 4, 200, "second issue").await.unwrap_err();
+    assert!(escrow_db::is_unique_violation(&err));
+
+    // Resolving or rejecting the first dispute allows a new dispute
+    disputes::set_status(&pool, &d1.id, "rejected", Some("rejected")).await.unwrap();
+    let d2 = disputes::create(&pool, 4, 200, "third issue").await.unwrap();
+    assert_eq!(d2.status, "requested");
+}

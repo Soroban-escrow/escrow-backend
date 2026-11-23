@@ -108,6 +108,10 @@ pub async fn handle_issue_comment(d: &CommandDeps, ev: &IssueCommentEvent) -> Re
                 reply("Only the maintainer or an author of a linked PR can open a dispute.".into()).await?;
                 return Ok("denied".into());
             }
+            if let Some(existing) = disputes::find_open_for_bounty(&d.db.pool, b.id).await? {
+                reply(format!("A dispute is already open for this bounty (id: {}).", existing.id)).await?;
+                return Ok("rejected:dispute-already-open".into());
+            }
             let reason: String = reason.chars().take(2000).collect();
             let dsp = disputes::create(&d.db.pool, b.id, uid, &reason).await?;
             audit::log(

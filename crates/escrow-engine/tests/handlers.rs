@@ -175,16 +175,20 @@ async fn disputes_come_only_from_the_maintainer_or_a_linked_pr_author(pool: PgPo
     assert_eq!(run(&w, "issue_comment", &stranger).await.unwrap(), "denied");
     let author = comment_event("/bounty dispute  it was reviewed unfairly  ", 900, "dev", "User", 3, "open", false);
     assert_eq!(run(&w, "issue_comment", &author).await.unwrap(), "dispute-requested");
-    assert_eq!(run(&w, "issue_comment", &say("/bounty dispute duplicate PR won", "alice")).await.unwrap(), "dispute-requested");
+    assert_eq!(
+        run(&w, "issue_comment", &say("/bounty dispute duplicate PR won", "alice")).await.unwrap(),
+        "rejected:dispute-already-open"
+    );
 
     let open = disputes::list_open(&pool).await.unwrap();
-    assert_eq!(open.len(), 2);
+    assert_eq!(open.len(), 1, "only one dispute is created");
     assert_eq!(
         (open[0].opened_by_github_id, open[0].reason.as_str(), open[0].status.as_str()),
         (900, "it was reviewed unfairly", "requested")
     );
     assert!(audit::exists(&pool, "dispute.requested", "bounty:4").await.unwrap());
-    assert!(w.gh.bodies().last().unwrap().contains("A human will review this within 48 hours"));
+    let reply = w.gh.bodies().last().unwrap();
+    assert!(reply.contains("already open") && reply.contains(&open[0].id));
 }
 
 #[sqlx::test(migrator = "MIGRATOR")]
