@@ -43,23 +43,55 @@ impl Metrics {
                 let _ = if label.is_empty() { writeln!(out, "{name} {v}") } else { writeln!(out, "{name}{{{label}}} {v}") };
             }
         };
-        let by = |sql: &'static str, key: &'static str| async move {
-            let rows: Vec<(String, i64)> = sqlx::query_as(sql).fetch_all(&db.pool).await.unwrap_or_default();
-            rows.into_iter().map(|(s, n)| (format!("{key}=\"{s}\""), n)).collect::<Vec<_>>()
+        // a failed gauge query is logged and flips skillescrow_metrics_db_up to 0 instead of
+        // silently rendering empty series
+        let mut db_up = true;
+        let by = |name: &'static str, sql: &'static str, key: &'static str| {
+            let db = &db.pool;
+            async move {
+                match sqlx::query_as::<_, (String, i64)>(sql).fetch_all(db).await {
+                    Ok(rows) => rows.into_iter().map(|(s, n)| (format!("{key}=\"{s}\""), n)).collect::<Vec<_>>(),
+                    Err(e) => {
+                        tracing::warn!(gauge = name, error = %e, "metrics gauge query failed");
+                        db_up = false;
+                        vec![]
+                    }
+                }
+            }
         };
-        gauge("skillescrow_bounties", "Bounties by status", by("SELECT status, count(*) FROM bounties GROUP BY status", "status").await);
-        gauge("skillescrow_payouts", "Payouts by status", by("SELECT status, count(*) FROM payouts GROUP BY status", "status").await);
-        gauge("skillescrow_jobs", "Background jobs by status", by("SELECT status, count(*) FROM jobs GROUP BY status", "status").await);
-        let lag: Option<i32> = sqlx::query_scalar("SELECT ledger FROM indexer_cursors WHERE id = 'bounty_escrow'")
+        gauge("skillescrow_bounties", "Bounties by status", by("bounties", "SELECT status, count(*) FROM bounties GROUP BY status", "status").await);
+        gauge("skillescrow_payouts", "Payouts by status", by("payouts", "SELECT status, count(*) FROM payouts GROUP BY status", "status").await);
+        gauge("skillescrow_jobs", "Background jobs by status", by("jobs", "SELECT status, count(*) FROM jobs GROUP BY status", "status").await);
+        let lag = match sqlx::query_scalar::<_, i32>("SELECT ledger FROM indexer_cursors WHERE id = 'bounty_escrow'")
             .fetch_optional(&db.pool)
             .await
-            .ok()
-            .flatten();
+        {
+            Ok(l) => l,
+            Err(e) => {
+                tracing::warn!(gauge = "indexer_ledger", error = %e, "metrics gauge query failed");
+                db_up = false;
+                None
+            }
+        };
         gauge(
             "skillescrow_indexer_ledger",
             "Last ledger the indexer has reached",
             lag.map(|l| vec![(String::new(), i64::from(l))]).unwrap_or_default(),
         );
+        gauge("skillescrow_metrics_db_up", "Whether the database gauge queries succeeded (1) or failed (0)", vec![(String::new(), i64::from(db_up))]);
         out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[sqlx::test(migrator = "escrow_db::MIGRATOR")]
+    async fn a_closed_pool_reports_db_down(pool: sqlx::PgPool) {
+        pool.close().await;
+        let db = Db::from_pool(pool);
+        let m = Metrics::default().render(&db).await;
+        assert!(m.contains("skillescrow_metrics_db_up 0"), "{m}");
     }
 }
