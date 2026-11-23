@@ -15,7 +15,7 @@ use axum::{
     response::{IntoResponse, Redirect, Response},
 };
 use escrow_core::{
-    oauth::{OAUTH_COOKIE, StateError, clear_cookie, cookie_value, safe_next, session_cookie, start_login, state_cookie, verify_state},
+    oauth::{OAUTH_COOKIE, SESSION_COOKIE, StateError, clear_cookie, cookie_value, safe_next, session_cookie, start_login, state_cookie, verify_state},
     security::csrf_token,
 };
 use escrow_db::{bounties, payouts, users};
@@ -64,10 +64,10 @@ pub struct CallbackQuery {
 
 pub async fn callback(State(s): State<AppState>, headers: HeaderMap, Query(q): Query<CallbackQuery>) -> ApiResult<Response> {
     let login = s.login.as_ref().ok_or_else(login_not_configured)?;
-    let clear = || [(header::SET_COOKIE, clear_cookie(OAUTH_COOKIE))];
+    let clear = || [(header::SET_COOKIE, clear_cookie(OAUTH_COOKIE, s.cfg.secure_cookies))];
     let fail = |status, code: &str, msg: &str| {
         let mut r = ApiError::new(status, code, msg).into_response();
-        r.headers_mut().append(header::SET_COOKIE, clear_cookie(OAUTH_COOKIE).parse().expect("ascii"));
+        r.headers_mut().append(header::SET_COOKIE, clear_cookie(OAUTH_COOKIE, s.cfg.secure_cookies).parse().expect("ascii"));
         Ok(r)
     };
 
@@ -120,7 +120,11 @@ pub async fn me(State(s): State<AppState>, headers: HeaderMap) -> ApiResult<Json
 pub async fn logout(State(s): State<AppState>, headers: HeaderMap) -> ApiResult<Response> {
     let a = require_user(&s, &headers, true).await?;
     session::destroy(&s.db, &a.session_id).await?;
-    Ok(([(header::SET_COOKIE, "se_session=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax")], Json(json!({ "ok": true }))).into_response())
+    Ok((
+        [(header::SET_COOKIE, clear_cookie(SESSION_COOKIE, s.cfg.secure_cookies))],
+        Json(json!({ "ok": true })),
+    )
+        .into_response())
 }
 
 #[derive(Deserialize)]

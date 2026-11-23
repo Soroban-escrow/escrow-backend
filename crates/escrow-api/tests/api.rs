@@ -12,7 +12,7 @@ use ed25519_dalek::{Signer as _, SigningKey};
 use escrow_api::{AppState, limiter::RateLimiter, login::GithubLogin, metrics::Metrics, router, state::ApiConfig};
 use escrow_core::{
     BountyStatus,
-    oauth::{OAUTH_COOKIE, clear_cookie},
+    oauth::{OAUTH_COOKIE, SESSION_COOKIE, clear_cookie},
     security::{csrf_token, hash_session_id, hmac_hex, sep53_hash},
 };
 use escrow_db::{Db, MIGRATOR, bounties, disputes, intents, payouts, prs, sessions, users};
@@ -415,7 +415,7 @@ async fn the_full_github_sign_in_flow_creates_a_session(pool: PgPool) {
     let cookies = set_cookies(&done);
     let sess = cookies.iter().find(|c| c.starts_with("se_session=")).unwrap();
     assert!(sess.contains("HttpOnly") && sess.contains("Max-Age=2592000"));
-    assert!(cookies.contains(&clear_cookie(OAUTH_COOKIE)), "the one-time state cookie is cleared");
+    assert!(cookies.contains(&clear_cookie(OAUTH_COOKIE, false)), "the one-time state cookie is cleared");
 
     let me = call(&e.app, Method::GET, "/auth/me", &[("cookie", cookie_pair(sess))], None).await;
     assert_eq!((me.status, me.body["login"].as_str(), me.body["isAdmin"].clone()), (StatusCode::OK, Some("octocat"), json!(true)));
@@ -503,7 +503,8 @@ async fn sessions_csrf_and_logout(pool: PgPool) {
 
     let out = call(&e.app, Method::POST, "/auth/logout", &s.hdrs(true), None).await;
     assert_eq!(out.status, StatusCode::OK);
-    assert!(set_cookies(&out)[0].contains("Max-Age=0"));
+    // the clearing cookie carries the same name and attributes the login cookie was set with
+    assert_eq!(set_cookies(&out)[0], clear_cookie(SESSION_COOKIE, false));
     assert_eq!(
         call(&e.app, Method::GET, "/auth/me", &s.hdrs(false), None).await.status,
         StatusCode::UNAUTHORIZED,

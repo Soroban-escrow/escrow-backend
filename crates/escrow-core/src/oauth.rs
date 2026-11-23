@@ -112,8 +112,8 @@ pub fn state_cookie(value: &str, secure: bool) -> String {
     )
 }
 
-pub fn clear_cookie(name: &str) -> String {
-    format!("{name}=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax")
+pub fn clear_cookie(name: &str, secure: bool) -> String {
+    format!("{name}=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax{}", if secure { "; Secure" } else { "" })
 }
 
 /// Reads one cookie value from a `Cookie` header.
@@ -181,6 +181,7 @@ mod tests {
         assert!(session_cookie("id", 60, true).ends_with("; Secure"));
         assert!(!session_cookie("id", 60, false).contains("Secure"));
         assert!(session_cookie("id", 60, false).contains("HttpOnly"));
-        assert!(clear_cookie("x").contains("Max-Age=0"));
+        assert!(clear_cookie("x", false).contains("Max-Age=0"));
+        assert!(clear_cookie("x", true).ends_with("; Secure"));
     }
 }
