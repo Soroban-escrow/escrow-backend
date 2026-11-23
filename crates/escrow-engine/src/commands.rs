@@ -5,6 +5,7 @@ use chrono::{DateTime, Duration, Utc};
 use escrow_core::{
     amounts::display,
     command::{Command, TokenSymbol, parse_command},
+    disputes::DISPUTE_SLA_HOURS,
     security::random_b64url,
 };
 use escrow_db::{Db, audit, bounties, disputes, github, intents, prs};
@@ -118,7 +119,7 @@ pub async fn handle_issue_comment(d: &CommandDeps, ev: &IssueCommentEvent) -> Re
                 &serde_json::json!({ "dispute": dsp.id }),
             )
             .await?;
-            reply("Dispute recorded. A human will review this within 48 hours.".into()).await?;
+            reply(format!("Dispute recorded. A human will review this within {DISPUTE_SLA_HOURS} hours.")).await?;
             Ok("dispute-requested".into())
         }
         Command::Fund { amount, token, days } => {

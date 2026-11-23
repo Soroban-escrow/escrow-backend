@@ -12,6 +12,7 @@ use ed25519_dalek::{Signer as _, SigningKey};
 use escrow_api::{AppState, limiter::RateLimiter, login::GithubLogin, metrics::Metrics, router, state::ApiConfig};
 use escrow_core::{
     BountyStatus,
+    disputes::DISPUTE_SLA_HOURS,
     oauth::{OAUTH_COOKIE, clear_cookie},
     security::{csrf_token, hash_session_id, hmac_hex, sep53_hash},
 };
@@ -927,6 +928,16 @@ async fn the_dispute_workflow_from_request_to_a_signable_resolution(pool: PgPool
         (queue.body[0]["id"].as_str(), queue.body[0]["overdue"].clone(), queue.body[0]["bounty"]["repo"]["fullName"].as_str()),
         (Some(d.id.as_str()), json!(false), Some("acme/widgets"))
     );
+
+    // Overdue flag reflects SLA expiration
+    let overdue_interval = format!("{} hours", DISPUTE_SLA_HOURS + 1);
+    sqlx::query(&format!("UPDATE disputes SET created_at = now() - interval '{overdue_interval}' WHERE id = $1"))
+        .bind(&d.id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let queue = call(&e.app, Method::GET, "/admin/disputes", &admin.hdrs(false), None).await;
+    assert_eq!(queue.body[0]["overdue"], json!(true));
 
     // resolving before it is open on chain is refused
     let early = call(

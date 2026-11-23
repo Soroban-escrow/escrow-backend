@@ -2,7 +2,7 @@ mod common;
 
 use chrono::{Duration, Utc};
 use common::*;
-use escrow_core::BountyStatus;
+use escrow_core::{BountyStatus, disputes::DISPUTE_SLA_HOURS};
 use escrow_db::{MIGRATOR, audit, bounties, disputes, github, intents, payouts, prs, users};
 use escrow_engine::{EngineError, dispatch::dispatch_webhook};
 use escrow_github::GithubError;
@@ -184,7 +184,7 @@ async fn disputes_come_only_from_the_maintainer_or_a_linked_pr_author(pool: PgPo
         (900, "it was reviewed unfairly", "requested")
     );
     assert!(audit::exists(&pool, "dispute.requested", "bounty:4").await.unwrap());
-    assert!(w.gh.bodies().last().unwrap().contains("A human will review this within 48 hours"));
+    assert!(w.gh.bodies().last().unwrap().contains(&format!("A human will review this within {DISPUTE_SLA_HOURS} hours")));
 }
 
 #[sqlx::test(migrator = "MIGRATOR")]

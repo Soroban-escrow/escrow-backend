@@ -11,6 +11,7 @@ pub mod command;
 pub mod config;
 pub mod contract_errors;
 pub mod criteria;
+pub mod disputes;
 pub mod fees;
 pub mod oauth;
 pub mod refs;
@@ -18,6 +19,7 @@ pub mod security;
 pub mod status;
 
 pub use amounts::{AmountError, TOKEN_DECIMALS, from_base_units, to_base_units};
+pub use disputes::{DISPUTE_ALERT_HOURS, DISPUTE_ALERT_LEAD_HOURS, DISPUTE_SLA_HOURS};
 pub use status::{BountyStatus, DisputeStatus, PayoutStatus};
 
 /// Sent by every outbound HTTP client, so a provider can tell which release made a request.

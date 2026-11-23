@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use chrono::{Duration, Utc};
 use common::*;
 use escrow_chain::{ChainBounty, ChainError, ChainReader, ContractConfig};
-use escrow_core::BountyStatus;
+use escrow_core::{BountyStatus, disputes::DISPUTE_ALERT_HOURS};
 use escrow_db::{MIGRATOR, audit, bounties, disputes, jobs, payouts, prs, webhooks};
 use escrow_engine::{
     indexer::CURSOR_ID,
@@ -307,7 +307,7 @@ async fn every_alert_condition_is_reported_and_a_calm_system_is_silent(pool: PgP
         "Relayer balance low: 3.00 XLM",
         "1 payout(s) FAILED",
         "Indexer is 1000 ledgers behind",
-        "1 dispute(s) older than 36 h",
+        &format!("1 dispute(s) older than {DISPUTE_ALERT_HOURS} h"),
         "Bounty 4 has a merged PR (FAILED)",
         "1 background job(s) gave up",
     ] {

@@ -3,6 +3,7 @@
 use crate::indexer::CURSOR_ID;
 use chrono::{DateTime, Duration, Utc};
 use escrow_chain::ChainReader;
+use escrow_core::disputes::DISPUTE_ALERT_HOURS;
 use escrow_db::{Db, audit, disputes, jobs, payouts, webhooks};
 use serde::Serialize;
 use std::{collections::HashMap, sync::Mutex, time::Instant};
@@ -76,9 +77,12 @@ pub async fn collect_alerts(db: &Db, a: &AlertInputs) -> Result<Vec<Alert>, sqlx
             out.push(Alert::new("indexer_lag", format!("Indexer is {lag} ledgers behind")));
         }
     }
-    let stale = disputes::count_open_older_than(&db.pool, a.now - Duration::hours(36)).await?;
+    let stale = disputes::count_open_older_than(&db.pool, a.now - Duration::hours(DISPUTE_ALERT_HOURS)).await?;
     if stale > 0 {
-        out.push(Alert::new("disputes_stale", format!("{stale} dispute(s) older than 36 h")));
+        out.push(Alert::new(
+            "disputes_stale",
+            format!("{stale} dispute(s) older than {DISPUTE_ALERT_HOURS} h"),
+        ));
     }
     // merged-but-unpaid PRs whose refund window opens within 72 h: the arbiter may need to act
     let risky: Vec<(i64, String)> = sqlx::query_as(
