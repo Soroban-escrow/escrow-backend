@@ -30,8 +30,8 @@ pub trait TxBuilder: Send + Sync {
     async fn build_refund(&self, maintainer: &str, bounty_id: u64) -> Result<String, ChainError>;
     async fn build_open_dispute(&self, arbiter: &str, bounty_id: u64) -> Result<String, ChainError>;
     async fn build_resolve(&self, arbiter: &str, bounty_id: u64, winner: Option<&str>, winner_bps: u32) -> Result<String, ChainError>;
-    /// Accepts only a signed, single-operation call to *our* contract. Returns the transaction hash.
-    async fn submit_signed(&self, xdr: &str, expected_source: Option<&str>) -> Result<String, ChainError>;
+    /// Accepts only a signed, single-operation call to *our* contract. Returns what was inspected.
+    async fn submit_signed(&self, xdr: &str, expected_source: Option<&str>) -> Result<crate::tx::Inspected, ChainError>;
 }
 
 /// The relayer: the only key the server holds. It can call `release` and nothing else.

@@ -265,10 +265,10 @@ impl TxBuilder for SorobanChain {
         self.prepare(arbiter, "resolve", args).await
     }
 
-    async fn submit_signed(&self, xdr: &str, expected_source: Option<&str>) -> Result<String, ChainError> {
+    async fn submit_signed(&self, xdr: &str, expected_source: Option<&str>) -> Result<tx::Inspected, ChainError> {
         let inspected = tx::inspect_submission(xdr, self.network_id, &self.contract, expected_source)?;
         self.send(xdr).await?;
-        Ok(inspected.hash)
+        Ok(inspected)
     }
 }
 

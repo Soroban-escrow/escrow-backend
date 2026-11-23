@@ -821,19 +821,28 @@ async fn contract_rejections_while_building_are_named(pool: PgPool) {
 
 #[sqlx::test(migrator = "MIGRATOR")]
 async fn submitting_a_signed_transaction_is_relayed_and_failures_are_explained(pool: PgPool) {
-    let e = env(pool, true, vec![]);
+    let e = env(pool.clone(), true, vec![]);
     let s = signed_in(&e, 900, "alice", None, false).await;
     let ok =
         call(&e.app, Method::POST, "/tx/submit", &s.hdrs(true), Some(json!({ "xdr": "AAAA-signed-envelope", "address": "GADDR" }))).await;
     assert_eq!((ok.status, ok.body["hash"].as_str().map(str::len)), (StatusCode::OK, Some(64)));
     assert_eq!(e.txb.submitted.lock().unwrap()[0], ("AAAA-signed-envelope".to_string(), Some("GADDR".to_string())));
-
+    // the relay is on the audit trail: who sent which function, with the tx hash as target
+    let row: (String, String, String) = sqlx::query_as(
+        "SELECT actor, action, target FROM audit_log WHERE action = 'tx.submitted' ORDER BY created_at DESC LIMIT 1",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(row, (format!("user:{}", s.user.id), "tx.submitted".to_string(), format!("tx:{}", "f".repeat(64))));
     *e.txb.fail_with.lock().unwrap() = Some(escrow_chain::ChainError::Invalid("this is not a call to the SkillEscrow contract".into()));
     let bad = call(&e.app, Method::POST, "/tx/submit", &s.hdrs(true), Some(json!({ "xdr": "AAAA-signed-envelope" }))).await;
     assert_eq!(
         (bad.status, bad.body["error"]["code"].clone(), bad.body["error"]["message"].as_str()),
         (StatusCode::UNPROCESSABLE_ENTITY, json!("submit_rejected"), Some("this is not a call to the SkillEscrow contract"))
     );
+    let m = get(&e, "/metrics").await;
+    assert!(m.text.contains("skillescrow_tx_submit_rejected_total 1"), "chain-rejected submits are counted: {}", m.text);
     assert_eq!(call(&e.app, Method::POST, "/tx/submit", &s.hdrs(true), Some(json!({ "xdr": "x" }))).await.status, StatusCode::BAD_REQUEST);
     assert_eq!(
         call(&e.app, Method::POST, "/tx/submit", &s.hdrs(true), Some(json!({ "xdr": "y".repeat(20_001) }))).await.status,

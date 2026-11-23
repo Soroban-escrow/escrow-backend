@@ -132,9 +132,13 @@ impl TxBuilder for FakeTxBuilder {
     async fn build_resolve(&self, arbiter: &str, bounty_id: u64, winner: Option<&str>, winner_bps: u32) -> Result<String, ChainError> {
         self.record(format!("resolve:{arbiter}:{bounty_id}:{}:{winner_bps}", winner.unwrap_or("-")))
     }
-    async fn submit_signed(&self, xdr: &str, expected_source: Option<&str>) -> Result<String, ChainError> {
+    async fn submit_signed(&self, xdr: &str, expected_source: Option<&str>) -> Result<escrow_chain::tx::Inspected, ChainError> {
         self.fail()?;
         self.submitted.lock().unwrap().push((xdr.into(), expected_source.map(Into::into)));
-        Ok("f".repeat(64))
+        Ok(escrow_chain::tx::Inspected {
+            hash: "f".repeat(64),
+            source: expected_source.unwrap_or("fake").into(),
+            function: "fake_fn".into(),
+        })
     }
 }

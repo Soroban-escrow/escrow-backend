@@ -4,6 +4,7 @@
 use crate::{
     error::{ApiError, ApiResult},
     extract::{ApiJson, ClientIp},
+    metrics::Metrics,
     routes::auth::mutation_limit,
     session::require_user,
     state::AppState,
@@ -16,7 +17,7 @@ use axum::{
 use chrono::{DateTime, Utc};
 use escrow_chain::{FundParams, keys};
 use escrow_core::BountyStatus;
-use escrow_db::{bounties, intents, payouts};
+use escrow_db::{audit, bounties, intents, payouts};
 use serde::Deserialize;
 use serde_json::json;
 
@@ -105,14 +106,26 @@ pub async fn submit(
     headers: HeaderMap,
     ApiJson(b): ApiJson<SubmitBody>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    require_user(&s, &headers, true).await?;
+    let a = require_user(&s, &headers, true).await?;
     mutation_limit(&s, &headers, &ip, 20)?;
     if b.xdr.len() < 10 || b.xdr.len() > 20_000 {
         return Err(ApiError::bad_request("xdr required"));
     }
     match s.txb.submit_signed(&b.xdr, b.address.as_deref()).await {
-        Ok(hash) => Ok(Json(json!({ "hash": hash }))),
+        Ok(i) => {
+            // who relayed which contract call: the audit trail is the record access logs cannot give
+            let _ = audit::log(
+                &s.db.pool,
+                &format!("user:{}", a.user.id),
+                "tx.submitted",
+                &format!("tx:{}", i.hash),
+                &json!({ "function": i.function, "source": i.source }),
+            )
+            .await;
+            Ok(Json(json!({ "hash": i.hash })))
+        }
         Err(e) => {
+            Metrics::inc(&s.metrics.tx_submit_rejected);
             let msg = match (&e, e.contract_error()) {
                 (_, Some(name)) => name.to_string(),
                 (escrow_chain::ChainError::Invalid(m), _) => m.clone(),
