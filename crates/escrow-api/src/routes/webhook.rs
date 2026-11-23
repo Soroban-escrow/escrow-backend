@@ -31,14 +31,15 @@ pub async fn receive(State(s): State<AppState>, headers: HeaderMap, body: Bytes)
         Metrics::inc(&s.metrics.webhooks_rejected);
         return Err(ApiError::bad_request("delivery headers are too long"));
     }
-    if !escrow_engine::dispatch::handles_event(event) {
-        Metrics::inc(&s.metrics.webhooks_ignored);
-        return Ok((StatusCode::ACCEPTED, Json(json!({ "ignored": true }))).into_response());
-    }
     let payload: serde_json::Value = serde_json::from_slice(&body).map_err(|_| {
         Metrics::inc(&s.metrics.webhooks_rejected);
         ApiError::new(400, "bad_json", "invalid JSON")
     })?;
+    // verified but unhandled events are acknowledged without a delivery row or job
+    if !escrow_engine::dispatch::handles_event(event) {
+        Metrics::inc(&s.metrics.webhooks_ignored);
+        return Ok((StatusCode::ACCEPTED, Json(json!({ "ignored": true }))).into_response());
+    }
 
     // the delivery record and its job are written together: neither can exist without the other
     let mut tx = s.db.pool.begin().await?;
