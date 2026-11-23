@@ -245,7 +245,7 @@ Advisory and isolated. Defence in layers: untrusted text is **fenced** (and the 
 | Malformed tracked contract event | The page is rolled back and the indexer stops advancing, loudly, rather than indexing something wrong. |
 | Lost database | Re-index (`escrowd reindex`) restores bounty state; restore a backup for GitHub bookkeeping (see the runbook). |
 | Contract state archived (TTL lapsed) | The relayer sees a restore preamble in its simulation, sends a `RestoreFootprint` transaction, waits, and retries once. For a transaction a user must sign, the API answers `state_archived`. |
-| Webhook redelivered | Recognised by delivery id; acknowledged, not processed twice. |
+| Webhook redelivered | Recognised by delivery id; acknowledged, not processed twice unless the first processing failed. |
 | Two merges for one bounty | One payout row (unique key); the second PR is told so. |
 
 ## Design decisions

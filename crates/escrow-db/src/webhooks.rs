@@ -13,6 +13,20 @@ pub async fn insert_delivery<'e>(ex: impl PgExecutor<'e>, id: &str, event: &str)
         .map(|r| r.rows_affected() == 1)
 }
 
+/// Whether this delivery was processed and ended in error — the state a GitHub "Redeliver" should retry.
+pub async fn failed_delivery<'e>(ex: impl PgExecutor<'e>, id: &str) -> Result<bool, sqlx::Error> {
+    sqlx::query_scalar("SELECT processed_at IS NOT NULL AND error IS NOT NULL FROM webhook_deliveries WHERE id = $1")
+        .bind(id)
+        .fetch_optional(ex)
+        .await
+        .map(|v| v.unwrap_or(false))
+}
+
+/// Clears the recorded outcome so the retried job's result is what remains on the delivery.
+pub async fn reset_delivery<'e>(ex: impl PgExecutor<'e>, id: &str) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE webhook_deliveries SET processed_at = NULL, error = NULL WHERE id = $1").bind(id).execute(ex).await.map(|_| ())
+}
+
 pub async fn mark_processed<'e>(ex: impl PgExecutor<'e>, id: &str, error: Option<&str>) -> Result<(), sqlx::Error> {
     sqlx::query("UPDATE webhook_deliveries SET processed_at = now(), error = $2 WHERE id = $1")
         .bind(id)

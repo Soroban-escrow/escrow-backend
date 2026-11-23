@@ -44,6 +44,15 @@ pub async fn receive(State(s): State<AppState>, headers: HeaderMap, body: Bytes)
     // the delivery record and its job are written together: neither can exist without the other
     let mut tx = s.db.pool.begin().await?;
     if !webhooks::insert_delivery(&mut *tx, id, event).await? {
+        // GitHub's "Redeliver" on a delivery whose processing died must actually retry it;
+        // a queued or successfully processed delivery stays a duplicate
+        if webhooks::failed_delivery(&mut *tx, id).await? {
+            webhooks::reset_delivery(&mut *tx, id).await?;
+            enqueue_webhook(&mut *tx, id, event, &payload).await?;
+            tx.commit().await?;
+            Metrics::inc(&s.metrics.webhooks_accepted);
+            return Ok((StatusCode::ACCEPTED, Json(json!({ "queued": true, "requeued": true }))).into_response());
+        }
         Metrics::inc(&s.metrics.webhooks_duplicate);
         return Ok((StatusCode::OK, Json(json!({ "duplicate": true }))).into_response());
     }

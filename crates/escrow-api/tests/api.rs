@@ -1303,6 +1303,36 @@ async fn config_is_cached_and_a_fresh_cached_value_survives_an_rpc_error(pool: P
 }
 
 #[sqlx::test(migrator = "MIGRATOR")]
+async fn a_redelivery_retries_only_deliveries_that_failed(pool: PgPool) {
+    let e = env(pool.clone(), true, vec![]);
+    let body = r#"{"action":"created"}"#;
+    let jobs =
+        || async { sqlx::query_scalar::<_, i64>("SELECT count(*) FROM jobs WHERE kind = 'webhook'").fetch_one(&pool).await.unwrap() };
+
+    // still queued: a redelivery is a duplicate
+    deliver(&e, "d-queued", "issues", body, Some(sign_body(body))).await;
+    let dup = deliver(&e, "d-queued", "issues", body, Some(sign_body(body))).await;
+    assert_eq!((dup.status, dup.body["duplicate"].clone()), (StatusCode::OK, json!(true)));
+    assert_eq!(jobs().await, 1);
+
+    // processed successfully: still a duplicate
+    escrow_db::webhooks::mark_processed(&pool, "d-queued", None).await.unwrap();
+    let dup2 = deliver(&e, "d-queued", "issues", body, Some(sign_body(body))).await;
+    assert_eq!(dup2.body["duplicate"].clone(), json!(true));
+    assert_eq!(jobs().await, 1);
+
+    // processing died (job exhausted its attempts): GitHub's Redeliver enqueues it again
+    sqlx::query("UPDATE jobs SET status = 'dead' WHERE kind = 'webhook'").execute(&pool).await.unwrap();
+    escrow_db::webhooks::mark_processed(&pool, "d-queued", Some("boom")).await.unwrap();
+    let retry = deliver(&e, "d-queued", "issues", body, Some(sign_body(body))).await;
+    assert_eq!((retry.status, retry.body["requeued"].clone()), (StatusCode::ACCEPTED, json!(true)));
+    assert_eq!(jobs().await, 2, "a new job was enqueued for the failed delivery");
+    let err: Option<String> =
+        sqlx::query_scalar("SELECT error FROM webhook_deliveries WHERE id = 'd-queued'").fetch_one(&pool).await.unwrap();
+    assert_eq!(err, None, "the recorded failure is cleared for the retry");
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
 async fn unhandled_webhook_events_are_acked_but_never_queued(pool: PgPool) {
     let e = env(pool.clone(), true, vec![]);
     let body = "{}";

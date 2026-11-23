@@ -491,7 +491,8 @@ paths:
       summary: GitHub App webhook receiver
       description: |
         Verifies `X-Hub-Signature-256` over the **raw** body in constant time, records the delivery id (so a redelivery is
-        acknowledged but not processed twice), and queues the work. The response is immediate; handlers run in the worker.
+        acknowledged but not processed twice unless the first processing failed), and queues the work. The response is
+        immediate; handlers run in the worker.
       parameters:
         - { name: X-Hub-Signature-256, in: header, required: true, schema: { type: string } }
         - { name: X-GitHub-Delivery, in: header, required: true, schema: { type: string } }

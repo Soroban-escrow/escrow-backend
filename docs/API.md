@@ -99,7 +99,7 @@ GET  /admin/status
 
 ## GitHub webhooks
 
-`POST /github/webhooks` with `X-Hub-Signature-256`, `X-GitHub-Delivery`, `X-GitHub-Event`. The signature is checked over the raw body before anything is parsed. A new delivery is recorded and queued (`202 { "queued": true }`); a redelivery is acknowledged without being processed again (`200 { "duplicate": true }`). Handled events: `installation`, `installation_repositories`, `issue_comment` (commands), `pull_request` (linking, review scheduling, merge → payout), `issues` (title and criteria edits). Others are acknowledged and ignored.
+`POST /github/webhooks` with `X-Hub-Signature-256`, `X-GitHub-Delivery`, `X-GitHub-Event`. The signature is checked over the raw body before anything is parsed. A new delivery is recorded and queued (`202 { "queued": true }`); a redelivery of a queued or successfully processed delivery is acknowledged without being processed again (`200 { "duplicate": true }`), while a redelivery of a delivery whose processing failed is queued again (`202 { "queued": true, "requeued": true }`). Handled events: `installation`, `installation_repositories`, `issue_comment` (commands), `pull_request` (linking, review scheduling, merge → payout), `issues` (title and criteria edits). Others are acknowledged and ignored.
 
 ## Operations
 
