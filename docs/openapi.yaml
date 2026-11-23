@@ -1,4 +1,4 @@
-openapi: 3.1.0
+﻿openapi: 3.1.0
 info:
   title: SkillEscrow Bounties API
   version: 0.1.0
@@ -254,7 +254,20 @@ paths:
         '403': { $ref: '#/components/responses/Error' }
         '404': { $ref: '#/components/responses/Error' }
         '410': { $ref: '#/components/responses/Error' }
-        '422': { $ref: '#/components/responses/Error' }
+        '422':
+          description: Refused. `error.code` is `submit_rejected` for a transaction that is not allowed, or `contract_error` when the escrow contract rejected the call; then `error.contractError` names the variant (for example `IssueAlreadyFunded`) and `error.message` is a friendly explanation.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: object
+                    required: [code, message]
+                    properties:
+                      code: { type: string, enum: [submit_rejected, contract_error] }
+                      message: { type: string }
+                      contractError: { type: string, description: 'Contract error variant; present only when code is contract_error', example: IssueAlreadyFunded }
         '503': { $ref: '#/components/responses/Error' }
   /tx/submit:
     post:

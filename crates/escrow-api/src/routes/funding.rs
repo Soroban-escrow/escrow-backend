@@ -1,4 +1,4 @@
-//! Funding links, transaction relay, and the maintainer's own release/refund transactions.
+﻿//! Funding links, transaction relay, and the maintainer's own release/refund transactions.
 //! The server prepares transactions and relays signed ones; a user's key never touches it.
 
 use crate::{
@@ -113,10 +113,11 @@ pub async fn submit(
     match s.txb.submit_signed(&b.xdr, b.address.as_deref()).await {
         Ok(hash) => Ok(Json(json!({ "hash": hash }))),
         Err(e) => {
-            let msg = match (&e, e.contract_error()) {
-                (_, Some(name)) => name.to_string(),
-                (escrow_chain::ChainError::Invalid(m), _) => m.clone(),
-                (escrow_chain::ChainError::Rejected(m), _) => m.clone(),
+            if let Some(name) = e.contract_error() {
+                return Err(ApiError::contract_rejected(name));
+            }
+            let msg = match &e {
+                escrow_chain::ChainError::Invalid(m) | escrow_chain::ChainError::Rejected(m) => m.clone(),
                 _ if e.is_transient() => return Err(ApiError::from_chain(&e)),
                 _ => "rejected".to_string(),
             };

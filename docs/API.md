@@ -1,4 +1,4 @@
-# HTTP API guide
+﻿# HTTP API guide
 
 The authoritative, machine-readable description is [`openapi.yaml`](openapi.yaml) (a test fails the build if it and the router disagree). This page is the human walkthrough: conventions, then the flows you will actually build, with `curl`.
 
@@ -70,7 +70,13 @@ POST /intents/{id}/build           { address, relayerAllowed }  →  { xdr }    
 POST /tx/submit                    { xdr, address? }            →  { hash }
 ```
 
-Only the GitHub user who typed `/bounty` may build through the link (`403 not_requester`). `/tx/submit` accepts **only** a signed, single-operation call to this contract's user functions; an unsigned envelope, another contract, a fee bump, a muxed source, or an admin function such as `upgrade` is refused before it reaches the network. After submission the indexer sees the `funded` event, creates the bounty, and the card appears on the issue.
+Only the GitHub user who typed `/bounty` may build through the link (`403 not_requester`). `/tx/submit` accepts **only** a signed, single-operation call to this contract's user functions; an unsigned envelope, another contract, a fee bump, a muxed source, or an admin function such as `upgrade` is refused before it reaches the network. If the contract itself rejects the call, the response is `422` with a stable code and the variant name in a separate field, so clients can branch without parsing text:
+
+```json
+{ "error": { "code": "contract_error", "contractError": "IssueAlreadyFunded", "message": "This issue already has a bounty." } }
+```
+
+`contractError` is one of the variants in `crates/escrow-core/src/contract_errors.rs`; `message` is safe to show to people. Other refusals keep `code: "submit_rejected"`. After submission the indexer sees the `funded` event, creates the bounty, and the card appears on the issue.
 
 ## Releasing and refunding as the maintainer
 
