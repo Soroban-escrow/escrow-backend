@@ -269,6 +269,19 @@ pub async fn run(cfg: Config, as_json: bool) -> Result<()> {
     } else {
         r.ok("urls", format!("{} / {}", cfg.api_public_url, cfg.web_public_url));
     }
+    if cfg.webhook_secret.len() < 32 {
+        r.add(
+            Status::Warn,
+            "webhook secret",
+            format!(
+                "GITHUB_WEBHOOK_SECRET is {} characters (recommend ≥ 32); short secrets are deprecated and will be rejected in a future release",
+                cfg.webhook_secret.len()
+            ),
+            Some("Generate a secret of at least 32 characters (e.g. `openssl rand -hex 32`) and update GitHub webhook settings."),
+        );
+    } else {
+        r.ok("webhook secret", "≥ 32 characters");
+    }
     if cfg.admin_github_ids.is_empty() {
         r.add(
             Status::Warn,

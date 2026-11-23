@@ -105,6 +105,7 @@ pub struct Config {
     pub vault_transit_key: Option<String>,
     /// Vault token (never printed; `Debug` omits it)
     pub vault_token: Option<String>,
+    pub warnings: Vec<String>,
 }
 
 impl fmt::Debug for Config {
@@ -346,6 +347,15 @@ impl Config {
             r.errors.push("AI_PRICE_INPUT_PER_MTOK and AI_PRICE_OUTPUT_PER_MTOK: must be positive".into());
         }
 
+        let mut warnings = Vec::new();
+        let webhook_secret = r.secret_min("GITHUB_WEBHOOK_SECRET", 8);
+        if !webhook_secret.is_empty() && webhook_secret.len() < 32 {
+            warnings.push(format!(
+                "GITHUB_WEBHOOK_SECRET is shorter than 32 characters ({}); this is deprecated and will become an error in a future release",
+                webhook_secret.len()
+            ));
+        }
+
         let cfg = Config {
             log_level: r.string("LOG_LEVEL", "info"),
             port: r.number("PORT", 3001u16),
@@ -358,7 +368,7 @@ impl Config {
             web_public_url: r.url("WEB_PUBLIC_URL", Some("http://localhost:3000")),
             session_secret: r.secret_min("SESSION_SECRET", 32),
             csrf_secret: r.secret_min("CSRF_SECRET", 32),
-            webhook_secret: r.secret_min("GITHUB_WEBHOOK_SECRET", 8),
+            webhook_secret,
             github,
             admin_github_ids,
             anthropic_api_key,
@@ -395,6 +405,7 @@ impl Config {
             vault_addr,
             vault_transit_key,
             vault_token,
+            warnings,
         };
         if r.errors.is_empty() { Ok(cfg) } else { Err(ConfigError(r.errors)) }
     }
@@ -458,6 +469,29 @@ mod tests {
         assert!(c.github.is_none() && c.relayer_secret.is_none());
         assert_eq!((c.min_days, c.max_days), (1, 90));
         assert!(!c.secure_cookies());
+    }
+
+    #[test]
+    fn webhook_secret_shorter_than_32_generates_warning() {
+        let env = with(&[("GITHUB_WEBHOOK_SECRET", "short-secret-1234")]);
+        let cfg = Config::from_map(&env).expect("valid config");
+        assert_eq!(cfg.warnings.len(), 1);
+        assert!(cfg.warnings[0].contains("GITHUB_WEBHOOK_SECRET is shorter than 32 characters"));
+        assert!(cfg.warnings[0].contains("deprecated"));
+    }
+
+    #[test]
+    fn webhook_secret_32_or_longer_has_no_warning() {
+        let env = with(&[("GITHUB_WEBHOOK_SECRET", "this-is-a-valid-32-byte-secret-ok-key")]);
+        let cfg = Config::from_map(&env).expect("valid config");
+        assert!(cfg.warnings.is_empty());
+    }
+
+    #[test]
+    fn webhook_secret_shorter_than_8_is_still_an_error() {
+        let env = with(&[("GITHUB_WEBHOOK_SECRET", "short")]);
+        let err = Config::from_map(&env).unwrap_err();
+        assert!(err.0.iter().any(|e| e.contains("GITHUB_WEBHOOK_SECRET: must be at least 8 characters")));
     }
 
     #[test]

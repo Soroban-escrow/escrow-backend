@@ -12,7 +12,7 @@ Secrets never appear in logs or `Debug` output.
 | `BOUNTY_CONTRACT_ID` | The deployed escrow contract, `C…` (56 chars). |
 | `SESSION_SECRET` | ≥ 32 chars. Signs the OAuth state cookie. `openssl rand -hex 32`. |
 | `CSRF_SECRET` | ≥ 32 chars. Binds CSRF tokens to sessions. |
-| `GITHUB_WEBHOOK_SECRET` | ≥ 8 chars. Must equal the secret set on the GitHub App. |
+| `GITHUB_WEBHOOK_SECRET` | ≥ 32 chars recommended (≥ 8 chars minimum during deprecation window). Must equal the secret set on the GitHub App. Secrets shorter than 32 characters emit a warning at startup and in `doctor`, and will become a hard error in a future release. |
 
 ## Server and database
 
