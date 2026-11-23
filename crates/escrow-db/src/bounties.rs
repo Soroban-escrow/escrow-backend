@@ -108,6 +108,41 @@ pub async fn open_ones<'e>(ex: impl PgExecutor<'e>) -> Result<Vec<Bounty>, sqlx:
     sqlx::query_as(sqlx::AssertSqlSafe(format!("SELECT {BOUNTY_COLS} FROM bounties WHERE status = 'OPEN' ORDER BY id"))).fetch_all(ex).await
 }
 
+/// A bounty due a refund reminder, with the stage that is due (`open` or `soon`).
+#[derive(Debug, FromRow)]
+pub struct DueReminder {
+    #[sqlx(flatten)]
+    pub bounty: Bounty,
+    pub kind: String,
+}
+
+/// Open bounties inside the refund-reminder window whose reminder of that kind has not been audited
+/// yet — one query instead of `open_ones` plus an `audit::exists` per bounty. `open_cutoff` is
+/// `now - grace` (deadline at or before it means the window is open); `soon_cutoff` adds the 48 h
+/// heads-up period. Due-ness and the already-sent check are both resolved in SQL.
+pub async fn due_refund_reminders<'e>(
+    ex: impl PgExecutor<'e>,
+    open_cutoff: DateTime<Utc>,
+    soon_cutoff: DateTime<Utc>,
+) -> Result<Vec<DueReminder>, sqlx::Error> {
+    sqlx::query_as(sqlx::AssertSqlSafe(format!(
+        "SELECT {BOUNTY_COLS},
+                CASE WHEN deadline <= $1 THEN 'open' ELSE 'soon' END AS kind
+         FROM bounties
+         WHERE status = 'OPEN' AND deadline <= $2
+           AND NOT EXISTS (
+             SELECT 1 FROM audit_log a
+             WHERE a.target = 'bounty:' || bounties.id::text
+               AND a.action = 'reminder.refund_' || CASE WHEN bounties.deadline <= $1 THEN 'open' ELSE 'soon' END
+           )
+         ORDER BY id"
+    )))
+    .bind(open_cutoff)
+    .bind(soon_cutoff)
+    .fetch_all(ex)
+    .await
+}
+
 pub async fn set_issue_data<'e>(ex: impl PgExecutor<'e>, id: i64, title: &str, criteria: &[String]) -> Result<(), sqlx::Error> {
     sqlx::query("UPDATE bounties SET issue_title = $2, criteria = $3, updated_at = now() WHERE id = $1")
         .bind(id)

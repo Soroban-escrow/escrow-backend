@@ -219,19 +219,10 @@ pub async fn send_refund_reminders(
     now: DateTime<Utc>,
 ) -> Result<ReminderOutcome, EngineError> {
     let mut out = ReminderOutcome::default();
-    for b in bounties::open_ones(&db.pool).await? {
-        let opens_at = b.deadline + grace;
-        let kind = if now >= opens_at {
-            "open"
-        } else if now >= opens_at - Duration::hours(48) {
-            "soon"
-        } else {
-            continue;
-        };
+    let open_cutoff = now - grace;
+    for r in bounties::due_refund_reminders(&db.pool, open_cutoff, open_cutoff + Duration::hours(48)).await? {
+        let (b, kind) = (r.bounty, r.kind.as_str());
         let (action, target) = (format!("reminder.refund_{kind}"), format!("bounty:{}", b.id));
-        if audit::exists(&db.pool, &action, &target).await? {
-            continue;
-        }
         let body = if kind == "soon" {
             format!(
                 "The refund window for this bounty opens in under 48 hours. If a PR was merged but not yet paid, resolve it at {web_url}/b/{}; otherwise the maintainer may reclaim the funds.",

@@ -220,6 +220,25 @@ async fn refund_reminders_go_out_once_each_at_the_right_time(pool: PgPool) {
     assert!(send(open + Duration::days(9)).await.unwrap().sent.is_empty());
 }
 
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn reminders_filter_many_open_bounties_in_sql(pool: PgPool) {
+    let w = world(pool.clone()).await;
+    open_bounty(&w, 4, 3).await;
+    // 30 open bounties far outside the window must not slow or spam the pass
+    for i in 0..30i64 {
+        let mut b = seed::B::new(100 + i, 200 + i as i32);
+        b.deadline = Utc::now() + Duration::days(30);
+        seed::bounty(&w.db, &b).await;
+    }
+    let commenter = GithubCommenter { db: w.db.clone(), gh: w.gh.clone() };
+    let grace = Duration::hours(72);
+    let deadline = bounties::get(&pool, 4).await.unwrap().unwrap().deadline;
+    let at = deadline + grace + Duration::minutes(1);
+    let out = send_refund_reminders(&w.db, &commenter, grace, "w", at).await.unwrap();
+    assert_eq!(out.sent, ["open:4"], "only the in-window bounty is reminded");
+    assert_eq!(w.gh.comments().len(), 1);
+}
+
 struct FlakyCommenter(Mutex<u32>);
 #[async_trait]
 impl IssueCommenter for FlakyCommenter {
