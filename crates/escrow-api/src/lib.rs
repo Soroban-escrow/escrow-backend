@@ -110,6 +110,7 @@ pub fn router(state: AppState) -> Router {
         .route("/admin/disputes/{id}/open-onchain", post(admin::open_onchain))
         .route("/admin/disputes/{id}/resolve/build", post(admin::resolve_build))
         .route("/admin/disputes/{id}/reject", post(admin::reject))
+        .route("/admin/audit", get(admin::list_audit))
         .route("/admin/payouts", get(admin::list_payouts))
         .route("/admin/payouts/{id}/retry", post(admin::retry_payout))
         .route("/admin/status", get(admin::status))

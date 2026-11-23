@@ -224,6 +224,59 @@ pub async fn list_payouts(
     Ok(Json(PayoutsPage { items: rows, next_cursor }))
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AuditQuery {
+    actor: Option<String>,
+    action: Option<String>,
+    /// only entries whose target starts with this
+    target: Option<String>,
+    cursor: Option<String>,
+    limit: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AuditPage {
+    items: Vec<escrow_db::models::AuditEntry>,
+    next_cursor: Option<String>,
+}
+
+/// Browse the audit trail: who did what to which target, newest first.
+pub async fn list_audit(
+    State(s): State<AppState>,
+    Extension(ip): Extension<ClientIp>,
+    headers: HeaderMap,
+    q: Result<Query<AuditQuery>, axum::extract::rejection::QueryRejection>,
+) -> ApiResult<Json<AuditPage>> {
+    admin(&s, &headers, &ip, false).await?;
+    let Query(q) = q.map_err(|_| ApiError::bad_request("invalid query"))?;
+    let limit = match q.limit.as_deref() {
+        None => 50,
+        Some(l) => l
+            .parse::<i64>()
+            .ok()
+            .filter(|n| (1..=200).contains(n))
+            .ok_or_else(|| ApiError::bad_request("invalid limit"))?,
+    };
+    let before_seq = match q.cursor.as_deref() {
+        None => None,
+        Some(c) => Some(c.parse::<i64>().map_err(|_| ApiError::bad_request("invalid cursor"))?),
+    };
+    let (items, next) = escrow_db::audit::browse(
+        &s.db.pool,
+        &escrow_db::audit::BrowseFilter {
+            actor: q.actor.as_deref(),
+            action: q.action.as_deref(),
+            target_prefix: q.target.as_deref(),
+            before_seq,
+            limit,
+        },
+    )
+    .await?;
+    Ok(Json(AuditPage { items, next_cursor: next.map(|n| n.to_string()) }))
+}
+
 /// Only payouts with no submitted transaction can be re-queued; one with a hash must be checked on chain first.
 pub async fn retry_payout(
     State(s): State<AppState>,

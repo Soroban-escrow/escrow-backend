@@ -207,7 +207,7 @@ pub struct IndexerCursor {
     pub updated_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, FromRow)]
+#[derive(Debug, Clone, FromRow, Serialize)]
 pub struct AuditEntry {
     pub id: String,
     pub actor: String,

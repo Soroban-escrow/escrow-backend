@@ -1245,6 +1245,44 @@ async fn over_long_webhook_headers_count_as_rejected(pool: PgPool) {
     assert!(m.text.contains("skillescrow_webhooks_rejected_total 2"), "{}", m.text);
 }
 
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn admins_can_browse_the_audit_log_with_filters_and_pagination(pool: PgPool) {
+    let e = env(pool.clone(), true, vec![900]);
+    let boss = signed_in(&e, 900, "boss", None, true).await;
+    let pleb = signed_in(&e, 901, "pleb", None, false).await;
+
+    for (actor, action, target) in [
+        ("user:1", "wallet.linked", "user:1"),
+        ("user:2", "wallet.linked", "user:2"),
+        ("admin:900", "dispute.rejected", "bounty:4"),
+        ("system", "reminder.refund_open", "bounty:7"),
+    ] {
+        escrow_db::audit::log(&pool, actor, action, target, &json!({})).await.unwrap();
+    }
+
+    assert_eq!(call(&e.app, Method::GET, "/admin/audit", &pleb.hdrs(false), None).await.status, StatusCode::FORBIDDEN);
+
+    let all = call(&e.app, Method::GET, "/admin/audit", &boss.hdrs(false), None).await;
+    assert_eq!(all.status, StatusCode::OK);
+    assert_eq!(all.body["items"].as_array().unwrap().len(), 4);
+    assert_eq!(all.body["items"][0]["action"].as_str().unwrap(), "reminder.refund_open");
+
+    let by_action = call(&e.app, Method::GET, "/admin/audit?action=wallet.linked", &boss.hdrs(false), None).await;
+    assert_eq!(by_action.body["items"].as_array().unwrap().len(), 2);
+    let by_actor = call(&e.app, Method::GET, "/admin/audit?actor=system", &boss.hdrs(false), None).await;
+    assert_eq!(by_actor.body["items"].as_array().unwrap().len(), 1);
+    let by_target = call(&e.app, Method::GET, "/admin/audit?target=bounty:", &boss.hdrs(false), None).await;
+    assert_eq!(by_target.body["items"].as_array().unwrap().len(), 2);
+
+    let p1 = call(&e.app, Method::GET, "/admin/audit?limit=3", &boss.hdrs(false), None).await;
+    assert_eq!(p1.body["items"].as_array().unwrap().len(), 3);
+    let cursor = p1.body["nextCursor"].as_str().unwrap().to_string();
+    let p2 = call(&e.app, Method::GET, &format!("/admin/audit?limit=3&cursor={cursor}"), &boss.hdrs(false), None).await;
+    assert_eq!(p2.body["items"].as_array().unwrap().len(), 1);
+    assert!(p2.body["nextCursor"].is_null());
+    assert_eq!(call(&e.app, Method::GET, "/admin/audit?cursor=abc", &boss.hdrs(false), None).await.status, StatusCode::BAD_REQUEST);
+}
+
 // ================= limits =================
 
 #[sqlx::test(migrator = "MIGRATOR")]

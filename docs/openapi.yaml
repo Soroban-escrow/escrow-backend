@@ -365,6 +365,41 @@ paths:
         '400': { $ref: '#/components/responses/Error' }
         '403': { $ref: '#/components/responses/Error' }
         '409': { $ref: '#/components/responses/Error' }
+  /admin/audit:
+    get:
+      tags: [Admin]
+      summary: Browse the audit log (actor/action exact, target prefix), keyset-paginated newest-first
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - { name: actor, in: query, schema: { type: string } }
+        - { name: action, in: query, schema: { type: string } }
+        - { name: target, in: query, schema: { type: string }, description: target prefix }
+        - { name: cursor, in: query, schema: { type: string }, description: seq of the last row of the previous page }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, nextCursor]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      required: [id, actor, action, target, data, createdAt]
+                      properties:
+                        id: { type: string }
+                        actor: { type: string }
+                        action: { type: string }
+                        target: { type: string }
+                        data: { type: object }
+                        createdAt: { type: string, format: date-time }
+                  nextCursor: { type: [string, 'null'] }
+        '400': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
   /admin/payouts:
     get:
       tags: [Admin]

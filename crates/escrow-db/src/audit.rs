@@ -40,6 +40,47 @@ pub async fn recent<'e>(ex: impl PgExecutor<'e>, limit: i64) -> Result<Vec<crate
         .await
 }
 
+/// Filters for [`browse`]: exact actor/action, target prefix, and a keyset cursor (last seq seen).
+#[derive(Default)]
+pub struct BrowseFilter<'a> {
+    pub actor: Option<&'a str>,
+    pub action: Option<&'a str>,
+    pub target_prefix: Option<&'a str>,
+    pub before_seq: Option<i64>,
+    pub limit: i64,
+}
+
+#[derive(Debug, sqlx::FromRow)]
+struct AuditRow {
+    #[sqlx(flatten)]
+    pub entry: crate::models::AuditEntry,
+    pub seq: i64,
+}
+
+/// Audit entries newest-first with optional filters; keyset-paginated on the hash-chain `seq`.
+/// Returns the rows plus the seq to pass as `before_seq` for the next page.
+pub async fn browse<'e>(ex: impl PgExecutor<'e>, f: &BrowseFilter<'_>) -> Result<(Vec<crate::models::AuditEntry>, Option<i64>), sqlx::Error> {
+    let rows: Vec<AuditRow> = sqlx::query_as(
+        "SELECT id, actor, action, target, data, created_at, seq FROM audit_log
+         WHERE ($1::text IS NULL OR actor = $1)
+           AND ($2::text IS NULL OR action = $2)
+           AND ($3::text IS NULL OR target LIKE $3 || '%')
+           AND ($4::bigint IS NULL OR seq < $4)
+         ORDER BY seq DESC LIMIT $5",
+    )
+    .bind(f.actor)
+    .bind(f.action)
+    .bind(f.target_prefix)
+    .bind(f.before_seq)
+    .bind(f.limit + 1)
+    .fetch_all(ex)
+    .await?;
+    let more = rows.len() as i64 > f.limit;
+    let rows: Vec<AuditRow> = rows.into_iter().take(f.limit as usize).collect();
+    let next = if more { rows.last().map(|r| r.seq) } else { None };
+    Ok((rows.into_iter().map(|r| r.entry).collect(), next))
+}
+
 /// Counts anomaly_detected audit entries in the last 24 hours.
 pub async fn count_anomalies_24h<'e>(ex: impl PgExecutor<'e>) -> Result<i64, sqlx::Error> {
     sqlx::query_scalar(
