@@ -711,6 +711,18 @@ async fn my_earnings_and_funded_bounties(pool: PgPool) {
     assert_eq!(funded.body[0]["id"], "4");
     let no_wallet = signed_in(&e, 501, "nowallet", None, false).await;
     assert_eq!(call(&e.app, Method::GET, "/me/funded", &no_wallet.hdrs(false), None).await.body, json!([]));
+
+    // a maintainer who switched wallets still sees bounties funded from the earlier wallet,
+    // matched by maintainer_github_id; with no wallet at all they are still listed
+    let switched = signed_in(&e, 500, "maint", Some("GNEW_WALLET"), false).await;
+    let f2 = call(&e.app, Method::GET, "/me/funded", &switched.hdrs(false), None).await;
+    assert_eq!(f2.body.as_array().unwrap().len(), 1, "old-wallet bounty still listed: {}", f2.text);
+    assert_eq!(f2.body[0]["id"], "4");
+    // and with no wallet linked at all, maintainer_github_id alone still lists it
+    sqlx::query("UPDATE bounties SET maintainer_github_id = 503 WHERE id = 4").execute(&pool).await.unwrap();
+    let no_wallet_same_github = signed_in(&e, 503, "nowallet3", None, false).await;
+    let f3 = call(&e.app, Method::GET, "/me/funded", &no_wallet_same_github.hdrs(false), None).await;
+    assert_eq!(f3.body.as_array().unwrap().len(), 1, "github_id match without a wallet: {}", f3.text);
     assert_eq!(get(&e, "/me/earnings").await.status, StatusCode::UNAUTHORIZED);
 }
 

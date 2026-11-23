@@ -105,6 +105,24 @@ pub async fn active_for_issues<'e>(ex: impl PgExecutor<'e>, repo_id: i64, issues
     .await
 }
 
+/// Bounties a maintainer funded, by current wallet OR by their GitHub id (funding may predate a
+/// wallet switch). `wallet` may be `None` for users who never linked one. Ordered by id DESC.
+pub async fn funded_by<'e>(
+    ex: impl PgExecutor<'e>,
+    wallet: Option<&str>,
+    github_id: i64,
+) -> Result<Vec<Bounty>, sqlx::Error> {
+    sqlx::query_as(sqlx::AssertSqlSafe(format!(
+        "SELECT {BOUNTY_COLS} FROM bounties
+         WHERE maintainer_github_id = $2 OR ($1::text IS NOT NULL AND maintainer = $1)
+         ORDER BY id DESC"
+    )))
+    .bind(wallet)
+    .bind(github_id)
+    .fetch_all(ex)
+    .await
+}
+
 pub async fn by_maintainer<'e>(ex: impl PgExecutor<'e>, wallet: &str) -> Result<Vec<Bounty>, sqlx::Error> {
     sqlx::query_as(sqlx::AssertSqlSafe(format!("SELECT {BOUNTY_COLS} FROM bounties WHERE maintainer = $1 ORDER BY id DESC")))
         .bind(wallet)

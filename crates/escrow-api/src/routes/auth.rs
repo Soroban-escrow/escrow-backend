@@ -185,8 +185,5 @@ pub async fn my_earnings(State(s): State<AppState>, headers: HeaderMap) -> ApiRe
 
 pub async fn my_funded(State(s): State<AppState>, headers: HeaderMap) -> ApiResult<Response> {
     let a = require_user(&s, &headers, false).await?;
-    let Some(w) = a.user.wallet else {
-        return Ok((StatusCode::OK, Json(json!([]))).into_response());
-    };
-    Ok(Json(bounties::by_maintainer(&s.db.pool, &w).await?).into_response())
+    Ok(Json(bounties::funded_by(&s.db.pool, a.user.wallet.as_deref(), a.user.github_id).await?).into_response())
 }
