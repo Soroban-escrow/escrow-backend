@@ -74,6 +74,11 @@ impl BountyStatus {
     pub fn is_active(self) -> bool {
         matches!(self, Self::Open | Self::Disputed)
     }
+
+    /// A bounty in a terminal state that can no longer be claimed or disputed.
+    pub fn is_terminal(self) -> bool {
+        !self.is_active()
+    }
 }
 
 impl PayoutStatus {
@@ -118,5 +123,8 @@ mod tests {
         assert_eq!(BountyStatus::from_contract_name("nope"), None);
         assert!(BountyStatus::Open.is_active() && BountyStatus::Disputed.is_active());
         assert!(!BountyStatus::Released.is_active());
+        assert!(BountyStatus::Released.is_terminal());
+        assert!(BountyStatus::Refunded.is_terminal());
+        assert!(BountyStatus::Resolved.is_terminal());
     }
 }

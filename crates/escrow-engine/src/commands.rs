@@ -102,6 +102,10 @@ pub async fn handle_issue_comment(d: &CommandDeps, ev: &IssueCommentEvent) -> Re
                 reply("There is no bounty on this issue.".into()).await?;
                 return Ok("rejected:no-bounty".into());
             };
+            if !b.status().is_active() {
+                reply(format!("This bounty is already {} and can no longer be disputed.", b.status.to_ascii_lowercase())).await?;
+                return Ok("rejected:inactive".into());
+            }
             let uid = ev.comment.user.id;
             let pr_author = prs::for_bounty(&d.db.pool, b.id).await?.iter().any(|p| p.author_github_id == uid);
             if b.maintainer_github_id != Some(uid) && !pr_author {

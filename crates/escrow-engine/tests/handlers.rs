@@ -558,3 +558,29 @@ async fn unknown_events_are_ignored_and_malformed_payloads_are_permanent_errors(
     assert!(matches!(e, EngineError::Payload(_)) && !e.is_transient(), "retrying a bad payload cannot help");
     let _ = users::get(&pool, "x").await;
 }
+
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn disputes_are_rejected_on_terminal_bounties(pool: PgPool) {
+    let w = world(pool.clone()).await;
+    seed::bounty(&w.db, &seed::B::new(4, 3)).await;
+
+    for (status, label) in [
+        ("RELEASED", "released"),
+        ("REFUNDED", "refunded"),
+        ("RESOLVED", "resolved"),
+    ] {
+        sqlx::query("UPDATE bounties SET status =  WHERE id = 4")
+            .bind(status)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let ev = say("/bounty dispute too late", "alice");
+        assert_eq!(run(&w, "issue_comment", &ev).await.unwrap(), "rejected:inactive");
+        let last_reply = w.gh.bodies().last().unwrap();
+        assert!(last_reply.contains("can no longer be disputed"), "expected terminal notice in {last_reply}");
+        assert!(last_reply.contains(label), "expected status name in {last_reply}");
+    }
+
+    assert_eq!(disputes::list_open(&pool).await.unwrap().len(), 0, "no rows are created for terminal disputes");
+}
