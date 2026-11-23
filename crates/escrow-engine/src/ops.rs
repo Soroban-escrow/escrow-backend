@@ -10,7 +10,7 @@ use std::{collections::HashMap, sync::Mutex, time::Instant};
 /// Ledgers behind the tip that we still call healthy (60 is about 5 minutes).
 pub const MAX_LAG_LEDGERS: i64 = 60;
 
-#[derive(Debug, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct Health {
     pub ok: bool,

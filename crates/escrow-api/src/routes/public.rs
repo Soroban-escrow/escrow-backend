@@ -21,8 +21,24 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 pub async fn health(State(s): State<AppState>) -> Response {
-    let h = health_report(&s.db, s.chain.as_ref(), s.cfg.check_indexer_lag).await;
+    // dependency checks are cached briefly: a flood of probes must not become DB/RPC load
+    let h = {
+        let cached = s.health_cache.lock().unwrap().clone();
+        match cached {
+            Some((at, h)) if at.elapsed() < s.cfg.health_ttl => h,
+            _ => {
+                let h = health_report(&s.db, s.chain.as_ref(), s.cfg.check_indexer_lag).await;
+                *s.health_cache.lock().unwrap() = Some((std::time::Instant::now(), h.clone()));
+                h
+            }
+        }
+    };
     (if h.ok { StatusCode::OK } else { StatusCode::SERVICE_UNAVAILABLE }, Json(h)).into_response()
+}
+
+/// Liveness probe: the process is up. No database or RPC dependency — use `/health` for readiness.
+pub async fn livez() -> &'static str {
+    "ok"
 }
 
 pub async fn metrics(State(s): State<AppState>, headers: HeaderMap) -> ApiResult<Response> {

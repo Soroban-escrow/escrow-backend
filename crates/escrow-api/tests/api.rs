@@ -92,6 +92,7 @@ fn env_with_lag(pool: PgPool, with_login: bool, admins: Vec<i64>, check_indexer_
             tokens: Tokens { usdc: "CUSDC".into(), xlm: "CTOKEN".into() },
             network: "testnet".into(),
             check_indexer_lag,
+            health_ttl: std::time::Duration::ZERO,
         }),
         chain: chain.clone(),
         txb: txb.clone(),
@@ -106,6 +107,7 @@ fn env_with_lag(pool: PgPool, with_login: bool, admins: Vec<i64>, check_indexer_
         metrics: Arc::new(Metrics::default()),
         now: Utc::now,
         config_cache: Default::default(),
+        health_cache: Default::default(),
     };
     Env { app: router(state), db, chain, txb, login }
 }
@@ -1202,6 +1204,22 @@ async fn a_correctly_signed_but_malformed_delivery_is_a_400(pool: PgPool) {
         .body(Body::from(ok_body))
         .unwrap();
     assert_eq!(e.app.clone().oneshot(no_headers).await.unwrap().status(), StatusCode::BAD_REQUEST);
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn livez_needs_no_dependencies_and_health_is_cached(pool: PgPool) {
+    let e = env(pool.clone(), true, vec![]);
+    // liveness: process up, no DB or RPC touched
+    let live = get(&e, "/livez").await;
+    assert_eq!((live.status, live.text.as_str()), (StatusCode::OK, "ok"));
+    // readiness still reports dependencies
+    let h = get(&e, "/health").await;
+    assert_eq!(h.status, StatusCode::OK);
+    assert_eq!(h.body["db"].as_bool(), Some(true));
+    assert_eq!(h.body["rpc"].as_bool(), Some(true));
+    // repeated probes within the TTL reuse the cached report
+    let h2 = get(&e, "/health").await;
+    assert_eq!(h2.body, h.body);
 }
 
 #[sqlx::test(migrator = "MIGRATOR")]

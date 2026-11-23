@@ -25,6 +25,8 @@ pub struct ApiConfig {
     pub network: String,
     /// When true (process also runs the indexer), indexer lag fails `/health`.
     pub check_indexer_lag: bool,
+    /// How long a `/health` report is reused before dependencies are checked again.
+    pub health_ttl: std::time::Duration,
 }
 
 #[derive(Clone)]
@@ -41,4 +43,6 @@ pub struct AppState {
     pub now: fn() -> DateTime<Utc>,
     /// In-process cache of the last contract config read, shared by every /config request.
     pub config_cache: Arc<std::sync::Mutex<Option<(std::time::Instant, escrow_chain::ContractConfig)>>>,
+    /// Last /health report, shared so repeated probes do not each hit the DB and RPC.
+    pub health_cache: Arc<std::sync::Mutex<Option<(std::time::Instant, escrow_engine::ops::Health)>>>,
 }

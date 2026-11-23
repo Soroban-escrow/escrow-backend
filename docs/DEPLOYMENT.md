@@ -69,7 +69,7 @@ Caddy obtains the TLS certificate automatically on first request to `https://$AP
 
 **7. Deploy the web app to Vercel** (from the `escrow-app` repo, root `apps/web`). Set `API_INTERNAL_URL=https://$API_DOMAIN` **at build time** (Next bakes its rewrites at build), plus the `NEXT_PUBLIC_*` variables from that repo's README.
 
-**8. Keep it healthy for free.** Point a free uptime monitor (UptimeRobot, Better Stack) at `https://$API_DOMAIN/health`: it returns `503` when the database or RPC is down or the indexer is behind. Set `ALERT_WEBHOOK_URL` to a Slack/Discord webhook for the worker's own alerts. Schedule database backups (see the runbook).
+**8. Keep it healthy for free.** Point a free uptime monitor (UptimeRobot, Better Stack) at `https://$API_DOMAIN/health`: it returns `503` when the database or RPC is down or the indexer is behind (results are cached for a few seconds). For pure liveness use `/livez`, which only proves the process is up — point restart-style probes there and keep `/health` for readiness/dependency monitoring. Set `ALERT_WEBHOOK_URL` to a Slack/Discord webhook for the worker's own alerts. Schedule database backups (see the runbook).
 
 ## Any other server
 

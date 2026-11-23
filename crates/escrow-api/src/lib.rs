@@ -61,7 +61,7 @@ fn client_ip(req: &Request, trust_proxy: bool, proxy_hops: usize) -> String {
 async fn edge(axum::extract::State(s): axum::extract::State<AppState>, mut req: Request, next: Next) -> Response {
     let ip = client_ip(&req, s.cfg.trust_proxy, s.cfg.proxy_hops as usize);
     Metrics::inc(&s.metrics.http_requests);
-    if req.uri().path() != "/health"
+    if !matches!(req.uri().path(), "/health" | "/livez")
         && !limiter::check_shared(&s.db.pool, &s.limiter, &format!("g:{ip}"), GLOBAL_PER_MINUTE, Instant::now()).await
     {
         Metrics::inc(&s.metrics.http_rate_limited);
@@ -86,6 +86,7 @@ pub fn router(state: AppState) -> Router {
 
     let mut app = Router::new()
         .route("/health", get(public::health))
+        .route("/livez", get(public::livez))
         .route("/metrics", get(public::metrics))
         .route("/config", get(public::config))
         .route("/stats", get(public::stats))

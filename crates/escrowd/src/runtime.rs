@@ -233,6 +233,7 @@ impl Runtime {
                 tokens: self.tokens(),
                 network: format!("{:?}", c.network).to_lowercase(),
                 check_indexer_lag,
+                health_ttl: std::time::Duration::from_secs(5),
             }),
             chain: Arc::new(self.chain.clone()) as Arc<dyn ChainReader>,
             txb: Arc::new(self.chain.clone()) as Arc<dyn TxBuilder>,
@@ -241,6 +242,8 @@ impl Runtime {
             limiter: Arc::new(RateLimiter::new(Duration::from_secs(60))),
             metrics: Arc::new(Metrics::default()),
             now: Utc::now,
+            config_cache: Default::default(),
+            health_cache: Default::default(),
         }
     }
 }
