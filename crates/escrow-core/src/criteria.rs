@@ -3,12 +3,20 @@
 use regex::Regex;
 use std::sync::LazyLock;
 
-static HEADING: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)^#{1,6}\s*acceptance criteria\s*:?\s*$").unwrap());
-static ANY_HEADING: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^#{1,6}\s").unwrap());
+static HEADING: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)^(?:#{1,6}\s+)?(?:\*{2}acceptance criteria:?\*{2}:?|acceptance criteria\s*:|#{1,6}\s+acceptance criteria\s*:?)\s*$").unwrap()
+});
+static SECTION_END: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)^(?:#{1,6}\s+|\*{2}[A-Za-z0-9 _-]+\*{2}:?|[A-Za-z0-9 _-]+:\s*$)").unwrap()
+});
 static ITEM: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\s*(?:[-*+]|\d+[.)])\s+(?:\[[ xX]\]\s+)?(.+?)\s*$").unwrap());
 static CHECKBOX: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\s*[-*+]\s+\[[ xX]\]\s+(.+?)\s*$").unwrap());
 
-/// Prefers the list under an "Acceptance criteria" heading; falls back to every task-list checkbox.
+/// Prefers the list under an "Acceptance criteria" heading (markdown heading, bold label, or
+/// plain "Acceptance criteria:" line); falls back to every task-list checkbox.
+///
+/// Nested items (indented by 2 or more spaces or a tab) are skipped to avoid flattening
+/// sub-tasks into top-level criteria.
 pub fn parse_criteria(body: Option<&str>) -> Vec<String> {
     let text = body.unwrap_or("").replace("\r\n", "\n");
     let lines: Vec<&str> = text.split('\n').collect();
@@ -16,8 +24,16 @@ pub fn parse_criteria(body: Option<&str>) -> Vec<String> {
     if let Some(h) = lines.iter().position(|l| HEADING.is_match(l.trim())) {
         let mut out = Vec::new();
         for l in &lines[h + 1..] {
-            if ANY_HEADING.is_match(l) {
+            let trimmed = l.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            if !ITEM.is_match(l) && SECTION_END.is_match(trimmed) {
                 break;
+            }
+            // Skip indented nested sub-items (2+ leading spaces or leading tab)
+            if l.starts_with("  ") || l.starts_with('\t') {
+                continue;
             }
             if let Some(m) = ITEM.captures(l) {
                 out.push(m[1].to_string());
@@ -43,6 +59,27 @@ mod tests {
     #[test]
     fn heading_is_case_insensitive_and_allows_a_colon() {
         assert_eq!(parse_criteria(Some("### ACCEPTANCE CRITERIA:\n- a")), ["a"]);
+    }
+
+    #[test]
+    fn heading_recognises_bold_and_plain_line_styles() {
+        assert_eq!(parse_criteria(Some("**Acceptance criteria**\n- a")), ["a"]);
+        assert_eq!(parse_criteria(Some("**Acceptance criteria:**\n- a")), ["a"]);
+        assert_eq!(parse_criteria(Some("**Acceptance criteria**:\n- a")), ["a"]);
+        assert_eq!(parse_criteria(Some("Acceptance criteria:\n- a")), ["a"]);
+        assert_eq!(parse_criteria(Some("Acceptance Criteria:\n- a")), ["a"]);
+    }
+
+    #[test]
+    fn skips_nested_sub_items() {
+        let body = "## Acceptance criteria\n- parent 1\n  - nested 1a\n  - nested 1b\n- parent 2\n\t- nested 2a";
+        assert_eq!(parse_criteria(Some(body)), ["parent 1", "parent 2"]);
+    }
+
+    #[test]
+    fn ignores_unrelated_task_lists_outside_criteria_section() {
+        let body = "Before task list:\n- [ ] unrelated 1\n- [ ] unrelated 2\n\n**Acceptance criteria:**\n- [ ] target 1\n- [ ] target 2\n\n## Notes\n- [ ] unrelated 3\n\n**Other Tasks**\n- [ ] unrelated 4";
+        assert_eq!(parse_criteria(Some(body)), ["target 1", "target 2"]);
     }
 
     #[test]
