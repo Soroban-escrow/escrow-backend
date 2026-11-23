@@ -346,6 +346,15 @@ impl Config {
             r.errors.push("AI_PRICE_INPUT_PER_MTOK and AI_PRICE_OUTPUT_PER_MTOK: must be positive".into());
         }
 
+        let token_usdc = r.string("TOKEN_USDC_CONTRACT_ID", "");
+        if !token_usdc.is_empty() && !strkey_c.is_match(&token_usdc) {
+            r.errors.push("TOKEN_USDC_CONTRACT_ID: must be a Soroban contract id (C…, 56 characters)".into());
+        }
+        let token_xlm = r.string("TOKEN_XLM_CONTRACT_ID", "");
+        if !token_xlm.is_empty() && !strkey_c.is_match(&token_xlm) {
+            r.errors.push("TOKEN_XLM_CONTRACT_ID: must be a Soroban contract id (C…, 56 characters)".into());
+        }
+
         let cfg = Config {
             log_level: r.string("LOG_LEVEL", "info"),
             port: r.number("PORT", 3001u16),
@@ -376,8 +385,8 @@ impl Config {
             relayer_channel_secrets,
             relayer_min_xlm_alert: r.number("RELAYER_MIN_XLM_ALERT", 50.0f64),
             alert_webhook_url: r.optional("ALERT_WEBHOOK_URL"),
-            token_usdc: r.string("TOKEN_USDC_CONTRACT_ID", ""),
-            token_xlm: r.string("TOKEN_XLM_CONTRACT_ID", ""),
+            token_usdc,
+            token_xlm,
             token_min,
             token_max,
             min_days,
@@ -544,13 +553,14 @@ mod tests {
 
     #[test]
     fn helpers() {
+        let valid_xlm = format!("C{}", "B".repeat(55));
         let c = Config::from_map(&with(&[
-            ("TOKEN_XLM_CONTRACT_ID", "CXLMXLMX"),
+            ("TOKEN_XLM_CONTRACT_ID", &valid_xlm),
             ("ADMIN_GITHUB_IDS", "7,9"),
             ("API_PUBLIC_URL", "https://api.example/"),
         ]))
         .unwrap();
-        assert_eq!(c.symbol_for("CXLMXLMX"), "XLM");
+        assert_eq!(c.symbol_for(&valid_xlm), "XLM");
         assert_eq!(c.symbol_for("CABCDEF"), "CABC…");
         assert!(c.is_admin(9) && !c.is_admin(8));
         assert!(c.secure_cookies());
@@ -586,5 +596,33 @@ mod tests {
     fn ai_pricing_must_be_positive() {
         let e = Config::from_map(&with(&[("AI_PRICE_INPUT_PER_MTOK", "0")])).unwrap_err().to_string();
         assert!(e.contains("must be positive"));
+    }
+
+    #[test]
+    fn token_contract_id_validation() {
+        // empty default is valid
+        let c = Config::from_map(&base()).unwrap();
+        assert_eq!(c.token_usdc, "");
+        assert_eq!(c.token_xlm, "");
+
+        // valid 56-char C... ids
+        let valid_c = format!("C{}", "B".repeat(55));
+        let c2 = Config::from_map(&with(&[
+            ("TOKEN_USDC_CONTRACT_ID", &valid_c),
+            ("TOKEN_XLM_CONTRACT_ID", &valid_c),
+        ]))
+        .unwrap();
+        assert_eq!(c2.token_usdc, valid_c);
+        assert_eq!(c2.token_xlm, valid_c);
+
+        // invalid ids are reported
+        let err = Config::from_map(&with(&[
+            ("TOKEN_USDC_CONTRACT_ID", "not-a-contract"),
+            ("TOKEN_XLM_CONTRACT_ID", "GABCDEF"),
+        ]))
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("TOKEN_USDC_CONTRACT_ID: must be a Soroban contract id (C…, 56 characters)"));
+        assert!(err.contains("TOKEN_XLM_CONTRACT_ID: must be a Soroban contract id (C…, 56 characters)"));
     }
 }
