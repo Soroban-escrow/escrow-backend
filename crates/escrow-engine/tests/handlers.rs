@@ -147,7 +147,7 @@ async fn help_and_usage_errors_reply_with_the_command_list(pool: PgPool) {
     assert_eq!(run(&w, "issue_comment", &say("/bounty help", "stranger")).await.unwrap(), "help");
     assert_eq!(run(&w, "issue_comment", &say("/bounty fifty", "stranger")).await.unwrap(), "error");
     let b = w.gh.bodies();
-    assert!(b[0].contains("SkillEscrow commands") && b[1].contains("Invalid amount \"fifty\"") && b[1].contains("SkillEscrow commands"));
+    assert!(b[0].contains("SkillEscrow commands") && b[0].contains("/bounty review") && b[1].contains("Invalid amount \"fifty\"") && b[1].contains("SkillEscrow commands"));
 }
 
 #[sqlx::test(migrator = "MIGRATOR")]
@@ -424,7 +424,7 @@ async fn dropping_the_closing_reference_unlinks_the_pr_from_the_bounty(pool: PgP
     assert_eq!(prs::for_bounty(&pool, 4).await.unwrap().len(), 1);
 }
 
-// #216: a merged PR's links are frozen — a later edit that drops the reference changes nothing.
+// #216: a merged PR's links are frozen â€” a later edit that drops the reference changes nothing.
 #[sqlx::test(migrator = "MIGRATOR")]
 async fn a_merged_prs_links_are_never_removed(pool: PgPool) {
     let w = world(pool.clone()).await;
