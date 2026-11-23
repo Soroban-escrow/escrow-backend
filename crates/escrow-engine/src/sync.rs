@@ -92,21 +92,30 @@ pub async fn refresh_bounty_card(d: &SyncDeps, bounty_id: i64) -> Result<CardOut
         web_url: &d.web_url,
     });
 
-    // One refresh at a time per bounty: without the lock two concurrent calls would both post a card.
-    let mut tx = d.db.pool.begin().await?;
-    bounties::lock_card(&mut tx, b.id).await?;
-    let outcome = match bounties::card_comment(&mut *tx, b.id).await? {
-        Some(cid) => {
+    // No transaction is held across the GitHub calls: updates need no lock, and posting is claimed
+    // atomically so two concurrent refreshes still cannot both post a card.
+    let outcome = match bounties::card_comment(&d.db.pool, b.id).await? {
+        Some(cid) if cid > 0 => {
             d.gh.update_comment(inst, name, cid, &body).await?;
             CardOutcome::Updated
         }
-        None => {
-            let cid = d.gh.post_comment(inst, name, b.issue_number, &body).await?;
-            bounties::set_card_comment(&mut *tx, b.id, cid).await?;
-            CardOutcome::Posted
+        _ => {
+            let claim = -Utc::now().timestamp();
+            if !bounties::claim_card_post(&d.db.pool, b.id, claim).await? {
+                return Ok(CardOutcome::Skipped); // another refresh is posting the card right now
+            }
+            match d.gh.post_comment(inst, name, b.issue_number, &body).await {
+                Ok(cid) => {
+                    bounties::set_card_comment(&d.db.pool, b.id, cid).await?;
+                    CardOutcome::Posted
+                }
+                Err(e) => {
+                    bounties::release_card_claim(&d.db.pool, b.id, claim).await?;
+                    return Err(e.into());
+                }
+            }
         }
     };
-    tx.commit().await?;
 
     if b.status().is_active() {
         d.gh.set_bounty_label(inst, name, b.issue_number, &label_for(b.amount_i128(), &symbol)).await?;

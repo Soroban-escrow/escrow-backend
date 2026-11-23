@@ -157,6 +157,35 @@ pub async fn lock_card(conn: &mut PgConnection, id: i64) -> Result<(), sqlx::Err
     sqlx::query("SELECT pg_advisory_xact_lock($1)").bind(id).execute(conn).await.map(|_| ())
 }
 
+/// Claims the right to post the bounty card without holding a transaction open across the GitHub
+/// call. `card_comment_id` doubles as the lease: a negative claim is `-<unix seconds>`, real GitHub
+/// comment ids are positive, and a claim older than two minutes may be retaken so a crashed poster
+/// cannot block the card forever. Returns true when this caller won the claim.
+pub async fn claim_card_post<'e>(ex: impl PgExecutor<'e>, id: i64, claim: i64) -> Result<bool, sqlx::Error> {
+    let stale_after = claim + 120;
+    let n = sqlx::query(
+        "UPDATE bounties SET card_comment_id = $2 WHERE id = $1
+         AND (card_comment_id IS NULL OR (card_comment_id < 0 AND card_comment_id > $3))",
+    )
+    .bind(id)
+    .bind(claim)
+    .bind(stale_after)
+    .execute(ex)
+    .await?
+    .rows_affected();
+    Ok(n == 1)
+}
+
+/// Releases a card-post claim after a failed GitHub call so the next refresh can retry.
+pub async fn release_card_claim<'e>(ex: impl PgExecutor<'e>, id: i64, claim: i64) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE bounties SET card_comment_id = NULL WHERE id = $1 AND card_comment_id = $2")
+        .bind(id)
+        .bind(claim)
+        .execute(ex)
+        .await
+        .map(|_| ())
+}
+
 // ---- state transitions, applied by the indexer only ----
 
 pub async fn apply_released<'e>(

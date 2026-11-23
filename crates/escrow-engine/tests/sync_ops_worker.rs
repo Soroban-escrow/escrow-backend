@@ -110,6 +110,21 @@ async fn concurrent_refreshes_post_exactly_one_card(pool: PgPool) {
 }
 
 #[sqlx::test(migrator = "MIGRATOR")]
+async fn card_post_claims_are_exclusive_expire_and_release(pool: PgPool) {
+    let w = world(pool.clone()).await;
+    open_bounty(&w, 4, 3).await;
+    let now = Utc::now().timestamp();
+    assert!(bounties::claim_card_post(&pool, 4, -(now - 300)).await.unwrap(), "first claim wins");
+    assert!(
+        bounties::claim_card_post(&pool, 4, -now).await.unwrap(),
+        "a claim older than two minutes can be retaken"
+    );
+    assert!(!bounties::claim_card_post(&pool, 4, -now).await.unwrap(), "a fresh claim blocks others");
+    bounties::release_card_claim(&pool, 4, -now).await.unwrap();
+    assert!(bounties::claim_card_post(&pool, 4, -now).await.unwrap(), "a released claim can be retaken");
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
 async fn if_the_issue_cannot_be_read_the_card_renders_from_stored_data(pool: PgPool) {
     let w = world(pool.clone()).await;
     open_bounty(&w, 4, 3).await;
