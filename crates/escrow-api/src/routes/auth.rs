@@ -18,7 +18,7 @@ use escrow_core::{
     oauth::{OAUTH_COOKIE, SESSION_COOKIE, StateError, clear_cookie, cookie_value, safe_next, session_cookie, start_login, state_cookie, verify_state},
     security::csrf_token,
 };
-use escrow_db::{bounties, payouts, users};
+use escrow_db::{audit, bounties, payouts, users};
 use escrow_github::OAuthError;
 use escrow_payouts::on_wallet_linked;
 use serde::Deserialize;
@@ -158,8 +158,10 @@ pub async fn wallet_verify(
 ) -> ApiResult<Json<serde_json::Value>> {
     let a = require_user(&s, &headers, true).await?;
     mutation_limit(&s, &headers, &ip, 20)?;
+    let old = a.user.wallet.clone();
     let address = wallet::verify_challenge(&s.db, &a.user.id, &b.challenge_id, &b.signature, (s.now)()).await?;
     Metrics::inc(&s.metrics.wallets_linked);
+    let _ = audit::log(&s.db.pool, &format!("user:{}", a.user.id), "wallet.linked", &a.user.id, &json!({ "old": old, "new": address })).await;
     // a payout that was waiting for this wallet continues now; the link itself has already succeeded
     if let Err(e) = on_wallet_linked(&s.payouts, a.user.github_id).await {
         tracing::error!(error = %e, "could not continue pending payouts after a wallet link");
@@ -167,9 +169,12 @@ pub async fn wallet_verify(
     Ok(Json(json!({ "address": address })))
 }
 
-pub async fn wallet_unlink(State(s): State<AppState>, headers: HeaderMap) -> ApiResult<Json<serde_json::Value>> {
+pub async fn wallet_unlink(State(s): State<AppState>, Extension(ip): Extension<ClientIp>, headers: HeaderMap) -> ApiResult<Json<serde_json::Value>> {
     let a = require_user(&s, &headers, true).await?;
+    mutation_limit(&s, &headers, &ip, 20)?;
+    let old = a.user.wallet.clone();
     wallet::unlink(&s.db, &a.user.id).await?;
+    let _ = audit::log(&s.db.pool, &format!("user:{}", a.user.id), "wallet.unlinked", &a.user.id, &json!({ "old": old })).await;
     Ok(Json(json!({ "ok": true })))
 }
 
