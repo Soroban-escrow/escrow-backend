@@ -21,7 +21,7 @@ Secrets never appear in logs or `Debug` output.
 | `PORT` | `3001` | |
 | `LOG_LEVEL` | `info` | Any `tracing` filter, e.g. `info,escrow_engine=debug`. `RUST_LOG` takes precedence. |
 | `LOG_FORMAT` | pretty | `json` for log shippers. The container image defaults to `json`. |
-| `DB_MAX_CONNECTIONS` | `10` | |
+| `DB_MAX_CONNECTIONS` | `10` | Maximum PostgreSQL pool connections. Recommended minimum depends on deployment mode: `WORKER_CONCURRENCY + 8` for combined `all` mode (`WORKER_CONCURRENCY + 3` background loops for indexer/relayer/periodic + 5 API headroom), `WORKER_CONCURRENCY + 3` for `worker` mode, and `5` for standalone `serve`. `doctor` and startup warn when below recommendation to prevent pool starvation during long operations. |
 | `AUTO_MIGRATE` | `true` | Apply migrations when `serve`/`worker`/`all` start. Set `false` to run `escrowd migrate` yourself. |
 | `API_PUBLIC_URL` | `http://localhost:3001` | Where browsers and GitHub reach the API. **Must be `https://` in production**: it decides whether cookies are `Secure`, and is the OAuth callback base (`{API_PUBLIC_URL}/auth/callback`). |
 | `WEB_PUBLIC_URL` | `http://localhost:3000` | The web app. The only CORS origin; where sign-in returns to; used in links the bot posts. |

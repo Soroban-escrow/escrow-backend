@@ -421,6 +421,22 @@ impl Config {
     pub fn is_admin(&self, github_id: i64) -> bool {
         self.admin_github_ids.contains(&github_id)
     }
+
+    /// Computes the recommended minimum `DB_MAX_CONNECTIONS` for a given deployment mode
+    /// and worker concurrency.
+    ///
+    /// Background tasks require connections for the indexer, relayer, and periodic loop (3),
+    /// plus 1 per concurrent queue worker (`concurrency`).
+    /// In combined `all` mode, additional connections (5) are reserved for API traffic
+    /// so long-running operations (such as GitHub bounty card refreshes) do not starve endpoints.
+    pub fn recommended_db_connections(mode: &str, concurrency: usize) -> u32 {
+        let worker_needed = (concurrency as u32) + 3;
+        match mode {
+            "serve" | "api" => 5,
+            "worker" => worker_needed,
+            _ => worker_needed + 5, // "all" or default combined mode
+        }
+    }
 }
 
 #[cfg(test)]
@@ -458,6 +474,17 @@ mod tests {
         assert!(c.github.is_none() && c.relayer_secret.is_none());
         assert_eq!((c.min_days, c.max_days), (1, 90));
         assert!(!c.secure_cookies());
+    }
+
+    #[test]
+    fn recommended_db_connections_thresholds() {
+        assert_eq!(Config::recommended_db_connections("worker", 4), 7);
+        assert_eq!(Config::recommended_db_connections("worker", 8), 11);
+        assert_eq!(Config::recommended_db_connections("serve", 4), 5);
+        assert_eq!(Config::recommended_db_connections("api", 10), 5);
+        assert_eq!(Config::recommended_db_connections("all", 4), 12);
+        assert_eq!(Config::recommended_db_connections("all", 1), 9);
+        assert_eq!(Config::recommended_db_connections("other", 4), 12);
     }
 
     #[test]

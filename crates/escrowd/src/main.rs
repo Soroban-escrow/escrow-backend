@@ -40,6 +40,9 @@ enum Cmd {
         /// Output check results as JSON
         #[arg(long)]
         json: bool,
+        /// Deployment mode to evaluate pool recommendations for (all, worker, serve)
+        #[arg(long, default_value = "all")]
+        mode: String,
     },
     /// Reconcile GitHub App installations and repositories now
     SyncInstallations,
@@ -56,8 +59,14 @@ enum Cmd {
 }
 
 fn init_logging(to_stderr: bool) {
+    let raw = std::env::var("LOG_LEVEL").unwrap_or_else(|_| "info".into());
     let filter = tracing_subscriber::EnvFilter::try_from_default_env()
-        .or_else(|_| tracing_subscriber::EnvFilter::try_new(std::env::var("LOG_LEVEL").unwrap_or_else(|_| "info".into())))
+        .or_else(|_| {
+            tracing_subscriber::EnvFilter::try_new(&raw).map_err(|e| {
+                eprintln!("escrowd: invalid LOG_LEVEL '{raw}': {e}, falling back to 'info'");
+                e
+            })
+        })
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
     let json_logs = std::env::var("LOG_FORMAT").is_ok_and(|f| f == "json");
     if to_stderr {
@@ -100,7 +109,7 @@ async fn main() -> Result<()> {
 
     match cli.cmd {
         Cmd::Healthcheck => unreachable!("handled before the configuration is loaded"),
-        Cmd::Doctor { json } => doctor::run(cfg, json).await,
+        Cmd::Doctor { json, mode } => doctor::run(cfg, &mode, json).await,
         Cmd::Migrate => {
             runtime::connect(cfg, true).await?;
             println!("migrations applied");
@@ -115,6 +124,21 @@ async fn main() -> Result<()> {
         Cmd::Reindex { from_ledger } => run::reindex(runtime::connect(cfg, auto_migrate()).await?, from_ledger).await,
         Cmd::Eval => run::eval(&cfg).await,
         Cmd::Serve | Cmd::Worker | Cmd::All => {
+            let mode = match cli.cmd {
+                Cmd::Serve => "serve",
+                Cmd::Worker => "worker",
+                _ => "all",
+            };
+            let recommended = Config::recommended_db_connections(mode, cfg.worker_concurrency);
+            if cfg.db_max_connections < recommended {
+                tracing::warn!(
+                    mode,
+                    configured = cfg.db_max_connections,
+                    recommended,
+                    concurrency = cfg.worker_concurrency,
+                    "DB_MAX_CONNECTIONS is below recommended minimum; pool starvation may occur under load"
+                );
+            }
             let rt = runtime::connect(cfg, auto_migrate()).await?;
             let stop = CancellationToken::new();
             tokio::spawn(run::shutdown_signal(stop.clone()));

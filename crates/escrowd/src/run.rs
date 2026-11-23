@@ -30,6 +30,15 @@ pub async fn serve(rt: &Runtime, stop: CancellationToken, check_indexer_lag: boo
 
 pub async fn worker(rt: &Runtime, stop: CancellationToken) -> Result<()> {
     let deps = rt.worker_deps();
+    let recommended = Config::recommended_db_connections("worker", rt.cfg.worker_concurrency);
+    if rt.cfg.db_max_connections < recommended {
+        tracing::warn!(
+            configured = rt.cfg.db_max_connections,
+            recommended,
+            concurrency = rt.cfg.worker_concurrency,
+            "DB_MAX_CONNECTIONS is below recommended minimum for worker; pool starvation may occur"
+        );
+    }
     if !rt.github_configured {
         tracing::warn!("GitHub App is not configured: webhook jobs, cards and comments will wait for it (see docs/GITHUB_APP.md)");
     } else if let Err(e) = sync_installations(&rt.db, rt.gh.as_ref()).await {

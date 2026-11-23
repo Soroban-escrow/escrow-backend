@@ -93,7 +93,7 @@ impl Report {
     }
 }
 
-pub async fn run(cfg: Config, as_json: bool) -> Result<()> {
+pub async fn run(cfg: Config, mode: &str, as_json: bool) -> Result<()> {
     let mut r = Report::new();
     r.ok("configuration", format!("valid ({:?}, contract {}…)", cfg.network, &cfg.contract_id[..8]));
 
@@ -268,6 +268,22 @@ pub async fn run(cfg: Config, as_json: bool) -> Result<()> {
         );
     } else {
         r.ok("urls", format!("{} / {}", cfg.api_public_url, cfg.web_public_url));
+    }
+    let recommended_conns = Config::recommended_db_connections(mode, cfg.worker_concurrency);
+    if cfg.db_max_connections < recommended_conns {
+        r.add(
+            Status::Warn,
+            "db pool",
+            format!(
+                "DB_MAX_CONNECTIONS ({}) is below recommended minimum ({}) for mode `{mode}` (WORKER_CONCURRENCY={})",
+                cfg.db_max_connections, recommended_conns, cfg.worker_concurrency
+            ),
+            Some(format!(
+                "Increase DB_MAX_CONNECTIONS to at least {recommended_conns} (or run worker and API in separate processes)."
+            )),
+        );
+    } else {
+        r.ok("db pool", format!("{} connections (recommended ≥ {} for mode `{mode}`)", cfg.db_max_connections, recommended_conns));
     }
     if cfg.admin_github_ids.is_empty() {
         r.add(
