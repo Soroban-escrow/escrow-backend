@@ -105,6 +105,7 @@ fn env_with_lag(pool: PgPool, with_login: bool, admins: Vec<i64>, check_indexer_
         limiter: Arc::new(RateLimiter::new(std::time::Duration::from_secs(60))),
         metrics: Arc::new(Metrics::default()),
         now: Utc::now,
+        config_cache: Default::default(),
     };
     Env { app: router(state), db, chain, txb, login }
 }
@@ -1201,6 +1202,20 @@ async fn a_correctly_signed_but_malformed_delivery_is_a_400(pool: PgPool) {
         .body(Body::from(ok_body))
         .unwrap();
     assert_eq!(e.app.clone().oneshot(no_headers).await.unwrap().status(), StatusCode::BAD_REQUEST);
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn config_is_cached_and_a_fresh_cached_value_survives_an_rpc_error(pool: PgPool) {
+    let e = env(pool, true, vec![]);
+    for _ in 0..3 {
+        let r = get(&e, "/config").await;
+        assert_eq!(r.status, StatusCode::OK);
+    }
+    assert_eq!(*e.chain.config_reads.lock().unwrap(), 1, "one RPC read for several requests");
+    *e.chain.config_down.lock().unwrap() = true;
+    let r = get(&e, "/config").await;
+    assert_eq!(r.status, StatusCode::OK, "fresh-enough cached config is served when the RPC fails");
+    assert_eq!(*e.chain.config_reads.lock().unwrap(), 1, "the error did not trigger another read within the TTL");
 }
 
 #[sqlx::test(migrator = "MIGRATOR")]

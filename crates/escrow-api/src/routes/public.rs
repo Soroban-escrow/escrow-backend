@@ -36,8 +36,27 @@ pub async fn metrics(State(s): State<AppState>, headers: HeaderMap) -> ApiResult
 }
 
 /// Contract parameters the web app shows (fee, refund grace, durations) and the arbiter address the admin page signs with.
+const CONFIG_TTL: std::time::Duration = std::time::Duration::from_secs(30);
+
 pub async fn config(State(s): State<AppState>) -> ApiResult<Response> {
-    let c = s.chain.get_config().await?;
+    // one RPC simulation per 30 s regardless of request rate; a fresh-enough cached value also
+    // covers a transient RPC error
+    let c = {
+        let cached = s.config_cache.lock().unwrap().clone();
+        match cached {
+            Some((at, c)) if at.elapsed() < CONFIG_TTL => c,
+            _ => match s.chain.get_config().await {
+                Ok(c) => {
+                    *s.config_cache.lock().unwrap() = Some((std::time::Instant::now(), c.clone()));
+                    c
+                }
+                Err(e) => match cached {
+                    Some((at, c)) if at.elapsed() < CONFIG_TTL => c,
+                    _ => return Err(ApiError::from_chain(&e)),
+                },
+            },
+        }
+    };
     let body = json!({
         "network": s.cfg.network,
         "feeBps": c.fee_bps,

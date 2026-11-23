@@ -8,6 +8,9 @@ pub struct FakeChain {
     pub bounties: Mutex<HashMap<u64, ChainBounty>>,
     pub ledger: Mutex<u32>,
     pub reads: Mutex<u32>,
+    pub config_reads: Mutex<u32>,
+    /// when set, get_config fails (to exercise stale-cache serving)
+    pub config_down: Mutex<bool>,
 }
 
 impl FakeChain {
@@ -45,6 +48,10 @@ impl ChainReader for FakeChain {
         self.bounties.lock().unwrap().get(&id).cloned().ok_or_else(|| ChainError::Simulation("HostError: Error(Contract, #10)".into()))
     }
     async fn get_config(&self) -> Result<ContractConfig, ChainError> {
+        *self.config_reads.lock().unwrap() += 1;
+        if *self.config_down.lock().unwrap() {
+            return Err(ChainError::Rpc { code: -1, message: "rpc down".into() });
+        }
         Ok(ContractConfig {
             admin: "GADMIN".into(),
             relayer: "GRELAYER".into(),

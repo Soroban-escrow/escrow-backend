@@ -39,4 +39,6 @@ pub struct AppState {
     pub limiter: Arc<RateLimiter>,
     pub metrics: Arc<Metrics>,
     pub now: fn() -> DateTime<Utc>,
+    /// In-process cache of the last contract config read, shared by every /config request.
+    pub config_cache: Arc<std::sync::Mutex<Option<(std::time::Instant, escrow_chain::ContractConfig)>>>,
 }
