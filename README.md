@@ -40,6 +40,7 @@ The backend of **SkillEscrow Bounties**, written in Rust. A maintainer comments 
 - [Repository layout](#repository-layout)
 - [Not done yet](#not-done-yet)
 - [Documentation](#documentation)
+- [Contributing](CONTRIBUTING.md)
 
 ---
 
@@ -313,6 +314,7 @@ Stated plainly, in rough order of importance before real money:
 
 | | |
 |---|---|
+| [CONTRIBUTING](CONTRIBUTING.md) | setup, running checks, architecture rules, PR checklist |
 | [ARCHITECTURE](docs/ARCHITECTURE.md) | components, data model, the queue, failure handling, design decisions |
 | [API](docs/API.md) · [openapi.yaml](docs/openapi.yaml) | every route, with examples |
 | [CONFIGURATION](docs/CONFIGURATION.md) | every environment variable |

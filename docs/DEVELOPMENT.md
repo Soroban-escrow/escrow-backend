@@ -1,5 +1,7 @@
 # Development
 
+> See [CONTRIBUTING.md](../CONTRIBUTING.md) for contribution workflow, architecture rules, and the pull request checklist.
+
 ## Setup
 
 - Rust stable ≥ 1.88 (`rust-toolchain.toml` selects stable with rustfmt and clippy)
