@@ -33,7 +33,8 @@ impl RateLimiter {
 
     /// Counts one request for `key`; `false` once it exceeds `max` within the window.
     pub fn check(&self, key: &str, max: u32, now: Instant) -> bool {
-        let mut hits = self.hits.lock().unwrap();
+        // a poisoned lock still holds valid state: recover it rather than panic every request
+        let mut hits = self.hits.lock().unwrap_or_else(|e| e.into_inner());
         if hits.len() > PRUNE_ABOVE {
             hits.retain(|_, (start, _)| now.duration_since(*start) < self.window);
         }

@@ -142,7 +142,8 @@ impl AlertSender {
     /// Returns the texts actually sent (alerts whose key is not in cooldown).
     pub async fn send(&self, alerts: &[Alert], now: Instant) -> Vec<String> {
         let fresh: Vec<String> = {
-            let mut sent = self.sent.lock().unwrap();
+            // recover a poisoned lock: the cooldown map stays usable instead of panicking every alert
+            let mut sent = self.sent.lock().unwrap_or_else(|e| e.into_inner());
             // a key past its cooldown holds nothing back, so dropping it keeps the map as small as the live alerts
             sent.retain(|_, t| now.duration_since(*t) < self.cooldown);
             alerts
