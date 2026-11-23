@@ -42,6 +42,7 @@ pub struct CommandDeps {
     pub now: fn() -> DateTime<Utc>,
 }
 
+pub const MAX_DISPUTE_REASON_CHARS: usize = 2000;
 const WRITERS: [&str; 3] = ["admin", "maintain", "write"];
 const HELP: &str = "**SkillEscrow commands**\n\
 - `/bounty <amount> [USDC|XLM] [<days>d]` fund this issue, e.g. `/bounty 50 USDC 14d` (needs write access)\n\
@@ -108,7 +109,8 @@ pub async fn handle_issue_comment(d: &CommandDeps, ev: &IssueCommentEvent) -> Re
                 reply("Only the maintainer or an author of a linked PR can open a dispute.".into()).await?;
                 return Ok("denied".into());
             }
-            let reason: String = reason.chars().take(2000).collect();
+            let was_shortened = reason.chars().count() > MAX_DISPUTE_REASON_CHARS;
+            let reason: String = reason.chars().take(MAX_DISPUTE_REASON_CHARS).collect();
             let dsp = disputes::create(&d.db.pool, b.id, uid, &reason).await?;
             audit::log(
                 &d.db.pool,
@@ -118,7 +120,14 @@ pub async fn handle_issue_comment(d: &CommandDeps, ev: &IssueCommentEvent) -> Re
                 &serde_json::json!({ "dispute": dsp.id }),
             )
             .await?;
-            reply("Dispute recorded. A human will review this within 48 hours.".into()).await?;
+            let reply_text = if was_shortened {
+                format!(
+                    "Dispute recorded (note: reason was shortened to the {MAX_DISPUTE_REASON_CHARS}-character limit). A human will review this within 48 hours."
+                )
+            } else {
+                "Dispute recorded. A human will review this within 48 hours.".into()
+            };
+            reply(reply_text).await?;
             Ok("dispute-requested".into())
         }
         Command::Fund { amount, token, days } => {

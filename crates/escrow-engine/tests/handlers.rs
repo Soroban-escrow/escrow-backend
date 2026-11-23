@@ -558,3 +558,28 @@ async fn unknown_events_are_ignored_and_malformed_payloads_are_permanent_errors(
     assert!(matches!(e, EngineError::Payload(_)) && !e.is_transient(), "retrying a bad payload cannot help");
     let _ = users::get(&pool, "x").await;
 }
+
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn dispute_reason_truncation_is_notified_to_user(pool: PgPool) {
+    let w = world(pool.clone()).await;
+    seed::bounty(&w.db, &seed::B::new(4, 3)).await;
+
+    // A 2,500-character dispute reason
+    let long_reason = "a".repeat(2500);
+    let ev = say(&format!("/bounty dispute {long_reason}"), "alice");
+    assert_eq!(run(&w, "issue_comment", &ev).await.unwrap(), "dispute-requested");
+
+    let open = disputes::list_open(&pool).await.unwrap();
+    assert_eq!(open.len(), 1);
+    assert_eq!(open[0].reason.len(), escrow_engine::commands::MAX_DISPUTE_REASON_CHARS);
+    let reply = w.gh.bodies().last().unwrap();
+    assert!(
+        reply.contains("shortened") || reply.contains("truncated"),
+        "confirmation reply should mention reason was shortened: {reply}"
+    );
+    assert!(
+        reply.contains(&escrow_engine::commands::MAX_DISPUTE_REASON_CHARS.to_string()),
+        "confirmation reply should reference limit: {reply}"
+    );
+}
