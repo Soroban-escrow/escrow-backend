@@ -1204,6 +1204,19 @@ async fn a_correctly_signed_but_malformed_delivery_is_a_400(pool: PgPool) {
 }
 
 #[sqlx::test(migrator = "MIGRATOR")]
+async fn unhandled_webhook_events_are_acked_but_never_queued(pool: PgPool) {
+    let e = env(pool.clone(), true, vec![]);
+    let body = "{}";
+    let r = deliver(&e, "d-star", "star", body, Some(sign_body(body))).await;
+    assert_eq!((r.status, r.body["ignored"].clone()), (StatusCode::ACCEPTED, json!(true)));
+    assert_eq!(sqlx::query_scalar::<_, i64>("SELECT count(*) FROM jobs").fetch_one(&pool).await.unwrap(), 0, "no job for an unhandled event");
+    assert_eq!(sqlx::query_scalar::<_, i64>("SELECT count(*) FROM webhook_deliveries").fetch_one(&pool).await.unwrap(), 0, "no delivery row either");
+    // a handled event still queues
+    let ok = deliver(&e, "d-ping", "issues", body, Some(sign_body(body))).await;
+    assert_eq!(ok.body["queued"].clone(), json!(true));
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
 async fn over_long_webhook_headers_count_as_rejected(pool: PgPool) {
     let e = env(pool, true, vec![]);
     let body = "{}";

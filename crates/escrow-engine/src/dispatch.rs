@@ -22,6 +22,12 @@ fn parse<T: serde::de::DeserializeOwned>(payload: &Value, what: &str) -> Result<
     serde_json::from_value(payload.clone()).map_err(|e| EngineError::Payload(format!("{what}: {e}")))
 }
 
+/// Webhook events the backend actually handles; anything else is acknowledged but never queued.
+/// Shared with the webhook route so unhandled deliveries do not cost a row and a job.
+pub fn handles_event(event: &str) -> bool {
+    matches!(event, "installation" | "installation_repositories" | "issue_comment" | "pull_request" | "issues")
+}
+
 pub async fn dispatch_webhook(d: &DispatchDeps, event: &str, payload: &Value) -> Result<String, EngineError> {
     let pool = &d.db.pool;
     match event {

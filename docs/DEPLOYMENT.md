@@ -65,7 +65,7 @@ docker compose exec app escrowd doctor
 ```
 Caddy obtains the TLS certificate automatically on first request to `https://$API_DOMAIN` (ports 80/443 must be reachable and the DNS record must resolve to the VM).
 
-**6. Tell GitHub where the API is.** In the GitHub App's settings: webhook URL `https://$API_DOMAIN/github/webhooks`, the same webhook secret, and the callback URL `https://$API_DOMAIN/auth/callback`. Use GitHub's "Recent deliveries" page to redeliver and watch the worker pick them up.
+**6. Tell GitHub where the API is.** In the GitHub App's settings: webhook URL `https://$API_DOMAIN/github/webhooks`, the same webhook secret, and subscribe only to the events the backend handles: `installation`, `installation_repositories`, `issue_comment`, `pull_request`, `issues` (other events are acknowledged but never queued), and the callback URL `https://$API_DOMAIN/auth/callback`. Use GitHub's "Recent deliveries" page to redeliver and watch the worker pick them up.
 
 **7. Deploy the web app to Vercel** (from the `escrow-app` repo, root `apps/web`). Set `API_INTERNAL_URL=https://$API_DOMAIN` **at build time** (Next bakes its rewrites at build), plus the `NEXT_PUBLIC_*` variables from that repo's README.
 

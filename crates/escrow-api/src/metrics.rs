@@ -17,6 +17,7 @@ pub struct Metrics {
     pub logins: AtomicU64,
     pub wallets_linked: AtomicU64,
     pub tx_submit_rejected: AtomicU64,
+    pub webhooks_ignored: AtomicU64,
 }
 
 impl Metrics {
@@ -38,6 +39,7 @@ impl Metrics {
         counter("skillescrow_logins_total", "Completed GitHub sign-ins", self.logins.load(Relaxed));
         counter("skillescrow_wallets_linked_total", "Wallets linked", self.wallets_linked.load(Relaxed));
         counter("skillescrow_tx_submit_rejected_total", "Signed transactions rejected by the relay", self.tx_submit_rejected.load(Relaxed));
+        counter("skillescrow_webhooks_ignored_total", "Verified webhooks for events the backend does not handle", self.webhooks_ignored.load(Relaxed));
 
         let mut gauge = |name: &str, help: &str, rows: Vec<(String, i64)>| {
             let _ = writeln!(out, "# HELP {name} {help}\n# TYPE {name} gauge");
