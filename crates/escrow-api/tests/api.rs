@@ -977,6 +977,7 @@ async fn the_dispute_workflow_from_request_to_a_signable_resolution(pool: PgPool
 
     // the chain emits `disputed`; the indexer would do this:
     disputes::mark_opened_onchain(&pool, 4).await.unwrap();
+    e.chain.set_status(4, BountyStatus::Disputed);
     let again = call(
         &e.app,
         Method::POST,
@@ -1036,6 +1037,59 @@ async fn the_dispute_workflow_from_request_to_a_signable_resolution(pool: PgPool
 
     let audited: Vec<String> = sqlx::query_scalar("SELECT action FROM audit_log ORDER BY created_at").fetch_all(&pool).await.unwrap();
     assert_eq!(audited, ["dispute.open_onchain.build", "dispute.resolve.build", "dispute.resolve.build"]);
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn dispute_builds_check_the_bounty_state_on_chain(pool: PgPool) {
+    let e = env(pool.clone(), true, vec![]);
+    fund(&e, 4, 3).await;
+    let admin = signed_in(&e, 1, "arb", None, true).await;
+    let (_, arbiter) = stellar(9);
+    let (_, winner) = stellar(10);
+    let d = disputes::create(&pool, 4, 500, "x").await.unwrap();
+
+    // the dispute row says "requested", but the bounty already left Open on chain
+    e.chain.set_status(4, BountyStatus::Released);
+    let r = call(
+        &e.app,
+        Method::POST,
+        &format!("/admin/disputes/{}/open-onchain", d.id),
+        &admin.hdrs(true),
+        Some(json!({ "arbiterAddress": arbiter })),
+    )
+    .await;
+    assert_eq!(
+        (r.status, r.body["error"]["code"].clone(), r.body["error"]["message"].as_str()),
+        (StatusCode::CONFLICT, json!("wrong_state"), Some("bounty is RELEASED"))
+    );
+
+    // opened_onchain dispute, but the chain never saw `disputed` (still Open)
+    e.chain.set_status(4, BountyStatus::Open);
+    disputes::mark_opened_onchain(&pool, 4).await.unwrap();
+    let r = call(
+        &e.app,
+        Method::POST,
+        &format!("/admin/disputes/{}/resolve/build", d.id),
+        &admin.hdrs(true),
+        Some(json!({ "arbiterAddress": arbiter, "winner": winner, "winnerBps": 5000 })),
+    )
+    .await;
+    assert_eq!(
+        (r.status, r.body["error"]["code"].clone(), r.body["error"]["message"].as_str()),
+        (StatusCode::CONFLICT, json!("wrong_state"), Some("bounty is OPEN"))
+    );
+
+    // once the chain reports Disputed the build is allowed again
+    e.chain.set_status(4, BountyStatus::Disputed);
+    let ok = call(
+        &e.app,
+        Method::POST,
+        &format!("/admin/disputes/{}/resolve/build", d.id),
+        &admin.hdrs(true),
+        Some(json!({ "arbiterAddress": arbiter, "winner": winner, "winnerBps": 5000 })),
+    )
+    .await;
+    assert_eq!(ok.status, StatusCode::OK, "{}", ok.text);
 }
 
 #[sqlx::test(migrator = "MIGRATOR")]

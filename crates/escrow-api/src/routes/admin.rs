@@ -7,6 +7,7 @@ use crate::{
     extract::{ApiJson, ClientIp},
     routes::{
         auth::mutation_limit,
+        funding::require_chain_status,
         public::{self, Detail},
     },
     session::{Authed, require_user},
@@ -102,6 +103,7 @@ pub async fn open_onchain(
     if d.status != "requested" {
         return Err(ApiError::conflict("wrong_state", &format!("dispute is {}", d.status)));
     }
+    require_chain_status(&s, d.bounty_id, escrow_core::BountyStatus::Open, "wrong_state").await?;
     let xdr = s.txb.build_open_dispute(&b.arbiter_address, u64::try_from(d.bounty_id).unwrap_or(0)).await?;
     audit_log(&s, &a, "dispute.open_onchain.build", format!("dispute:{}", d.id), json!({ "bounty": d.bounty_id.to_string() })).await?;
     Ok(Json(json!({ "xdr": xdr })))
@@ -136,6 +138,7 @@ pub async fn resolve_build(
     if d.status != "opened_onchain" {
         return Err(ApiError::conflict("wrong_state", &format!("dispute is {}; open it on chain first", d.status)));
     }
+    require_chain_status(&s, d.bounty_id, escrow_core::BountyStatus::Disputed, "wrong_state").await?;
     let winner = if b.winner_bps > 0 { b.winner.as_deref() } else { None };
     let xdr = s.txb.build_resolve(&b.arbiter_address, u64::try_from(d.bounty_id).unwrap_or(0), winner, b.winner_bps).await?;
     disputes::set_note(&s.db.pool, &d.id, &b.note).await?;

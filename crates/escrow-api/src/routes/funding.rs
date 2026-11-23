@@ -153,13 +153,17 @@ async fn maintainer_bounty(s: &AppState, headers: &HeaderMap, ip: &ClientIp, id:
     Ok(b)
 }
 
-async fn require_open_on_chain(s: &AppState, id: i64) -> ApiResult<()> {
-    // never trust the database for a money decision
+/// Never trust the database for a money decision: the bounty must be in `want` on chain.
+pub(crate) async fn require_chain_status(s: &AppState, id: i64, want: BountyStatus, code: &str) -> ApiResult<()> {
     let chain = s.chain.get_bounty(u64::try_from(id).unwrap_or(0)).await?;
-    if chain.status != BountyStatus::Open {
-        return Err(ApiError::conflict("not_open", &format!("bounty is {}", chain.status)));
+    if chain.status != want {
+        return Err(ApiError::conflict(code, &format!("bounty is {}", chain.status)));
     }
     Ok(())
+}
+
+async fn require_open_on_chain(s: &AppState, id: i64) -> ApiResult<()> {
+    require_chain_status(s, id, BountyStatus::Open, "not_open").await
 }
 
 pub async fn build_release(
