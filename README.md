@@ -1,4 +1,4 @@
-<p align="center">
+﻿<p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/img/banner-dark.svg">
     <img alt="SkillEscrow backend: the chain is the source of truth" src="docs/img/banner-light.svg" width="100%">
@@ -7,7 +7,7 @@
 
 # escrow-backend
 
-The backend of **SkillEscrow Bounties**, written in Rust. A maintainer comments `/bounty 50 USDC` on a GitHub issue, funds it from a wallet into a Soroban escrow contract, and **merging the pull request that closes the issue pays its author from escrow, in seconds**. This service is the part in the middle: it indexes the contract, listens to GitHub, keeps the bounty card on the issue current, relays payouts, and serves the API the web app talks to.
+The backend of **SkillEscrow Bounties**, written in Rust. A maintainer comments [`/bounty 50 USDC`](docs/COMMANDS.md) on a GitHub issue, funds it from a wallet into a Soroban escrow contract, and **merging the pull request that closes the issue pays its author from escrow, in seconds**. This service is the part in the middle: it indexes the contract, listens to GitHub, keeps the bounty card on the issue current, relays payouts, and serves the API the web app talks to.
 
 [![ci](https://github.com/Soroban-escrow/escrow-backend/actions/workflows/ci.yml/badge.svg)](https://github.com/Soroban-escrow/escrow-backend/actions/workflows/ci.yml)
 
@@ -291,8 +291,8 @@ crates/
   escrow-db/        Postgres + migrations escrow-engine/    indexer, handlers, worker
   escrow-github/    GitHub App client     escrow-api/       axum API
   escrow-testkit/   test fakes            escrowd/          the binary
-docs/               ARCHITECTURE  API  openapi.yaml  CONFIGURATION  DEPLOYMENT  RUNBOOK  SECURITY
-                    DEVELOPMENT  MIGRATING  PROGRESS      img/
+docs/               ARCHITECTURE  API  openapi.yaml  COMMANDS  CONFIGURATION  DEPLOYMENT
+                    RUNBOOK  SECURITY  DEVELOPMENT  MIGRATING  PROGRESS  img/
 deploy/Caddyfile    Dockerfile  docker-compose.yml  .env.example
 scripts/            test.sh  import-from-prisma.sql
 .github/            ci.yml (fmt, clippy, tests, audit, image build, secret scan)  dependabot.yml
@@ -315,6 +315,7 @@ Stated plainly, in rough order of importance before real money:
 |---|---|
 | [ARCHITECTURE](docs/ARCHITECTURE.md) | components, data model, the queue, failure handling, design decisions |
 | [API](docs/API.md) · [openapi.yaml](docs/openapi.yaml) | every route, with examples |
+| [COMMANDS](docs/COMMANDS.md) | /bounty comment commands: syntax, limits, permissions, and bot replies |
 | [CONFIGURATION](docs/CONFIGURATION.md) | every environment variable |
 | [DEPLOYMENT](docs/DEPLOYMENT.md) | a free always-on setup, plus the generic version |
 | [RUNBOOK](docs/RUNBOOK.md) | operating it: alerts, recovery, backups, rotating secrets, the mainnet checklist |

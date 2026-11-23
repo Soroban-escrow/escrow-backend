@@ -1,4 +1,4 @@
-# HTTP API guide
+﻿# HTTP API guide
 
 The authoritative, machine-readable description is [`openapi.yaml`](openapi.yaml) (a test fails the build if it and the router disagree). This page is the human walkthrough: conventions, then the flows you will actually build, with `curl`.
 
@@ -61,7 +61,7 @@ The signature is verified over `sha256("Stellar Signed Message:\n" + message)`. 
 
 ## Funding a bounty
 
-The bot's comment links to the web app's `/fund/<id>`, which uses:
+The bot's comment links to the web app's /fund/<id> (see the [Command reference](COMMANDS.md) for full syntax and options), which uses:
 
 ```
 GET  /intents/{id}                 { state: open|used|expired, repo, issueNumber, token, amount, durationDays, expiresAt, bountyId }
