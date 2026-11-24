@@ -6,6 +6,10 @@ use axum::{
 use escrow_chain::ChainError;
 use serde_json::json;
 
+tokio::task_local! {
+    pub(crate) static REQUEST_ID: String;
+}
+
 /// Every error leaves the API as `{ "error": { "code": "...", "message": "..." } }`.
 /// `code` is stable and meant for programs; `message` is for people.
 #[derive(Debug)]
@@ -70,7 +74,11 @@ impl ApiError {
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        (self.status, Json(json!({ "error": { "code": self.code, "message": self.message } }))).into_response()
+        let mut error = json!({ "code": self.code, "message": self.message });
+        if let Ok(id) = REQUEST_ID.try_with(|id| id.clone()) {
+            error["requestId"] = json!(id);
+        }
+        (self.status, Json(json!({ "error": error }))).into_response()
     }
 }
 

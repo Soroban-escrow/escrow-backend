@@ -19,7 +19,7 @@ use axum::{
     Router,
     extract::{ConnectInfo, DefaultBodyLimit, Request},
     http::{HeaderName, HeaderValue, Method, header},
-    middleware::{Next, from_fn_with_state},
+    middleware::{Next, from_fn, from_fn_with_state},
     response::{IntoResponse, Response},
     routing::{delete, get, post, put},
 };
@@ -29,7 +29,12 @@ use metrics::Metrics;
 use routes::{admin, auth, funding, public, webhook};
 pub use state::{ApiConfig, AppState};
 use std::{net::SocketAddr, time::Instant};
-use tower_http::{cors::CorsLayer, set_header::SetResponseHeaderLayer, trace::TraceLayer};
+use tower_http::{
+    cors::CorsLayer,
+    request_id::{MakeRequestId, MakeRequestUuid},
+    set_header::SetResponseHeaderLayer,
+    trace::TraceLayer,
+};
 
 const GLOBAL_PER_MINUTE: u32 = 300;
 const BODY_LIMIT: usize = 1 << 20;
@@ -45,6 +50,31 @@ fn xff_client_ip(xff: &str, hops: usize) -> Option<String> {
     let parts: Vec<&str> = xff.split(',').map(str::trim).filter(|p| !p.is_empty()).collect();
     let ip = parts.get(parts.len().checked_sub(hops)?)?;
     (ip.len() <= 45).then(|| (*ip).to_string())
+}
+
+const REQUEST_ID_HEADER: &str = "x-request-id";
+
+fn well_formed_request_id(value: &HeaderValue) -> bool {
+    value.to_str().is_ok_and(|s| {
+        !s.is_empty() && s.len() <= 128 && s.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~'))
+    })
+}
+
+fn generated_request_id(req: &Request) -> HeaderValue {
+    let mut make = MakeRequestUuid;
+    make.make_request_id(req).map(|id| id.into_header_value()).unwrap_or_else(|| HeaderValue::from_static("unknown"))
+}
+
+/// Gives every request an id: the client's `x-request-id` when it is well-formed, otherwise a UUID.
+/// The id is visible to handlers/logs, returned on the response and included in error bodies.
+async fn request_id(mut req: Request, next: Next) -> Response {
+    let id =
+        req.headers().get(REQUEST_ID_HEADER).filter(|v| well_formed_request_id(v)).cloned().unwrap_or_else(|| generated_request_id(&req));
+    let id_string = id.to_str().expect("request id is visible ASCII").to_string();
+    req.headers_mut().insert(REQUEST_ID_HEADER, id.clone());
+    let mut resp = error::REQUEST_ID.scope(id_string, next.run(req)).await;
+    resp.headers_mut().insert(REQUEST_ID_HEADER, id);
+    resp
 }
 
 fn client_ip(req: &Request, trust_proxy: bool, proxy_hops: usize) -> String {
@@ -130,10 +160,11 @@ pub fn router(state: AppState) -> Router {
             HeaderValue::from_static("default-src 'none'; frame-ancestors 'none'"),
         ))
         // spans carry the path only: query strings hold one-time OAuth codes
-        .layer(
-            TraceLayer::new_for_http()
-                .make_span_with(|r: &axum::http::Request<_>| tracing::info_span!("http", method = %r.method(), path = %r.uri().path())),
-        );
+        .layer(TraceLayer::new_for_http().make_span_with(|r: &axum::http::Request<_>| {
+            let request_id = r.headers().get(REQUEST_ID_HEADER).and_then(|v| v.to_str().ok()).unwrap_or("-");
+            tracing::info_span!("http", method = %r.method(), path = %r.uri().path(), request_id = %request_id)
+        }))
+        .layer(from_fn(request_id));
     if secure {
         app = app.layer(SetResponseHeaderLayer::overriding(
             header::STRICT_TRANSPORT_SECURITY,

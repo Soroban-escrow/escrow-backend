@@ -11,7 +11,7 @@ info:
     **Conventions**
     - JSON everywhere. 64-bit ids (`id`, `repoId`, `githubId`, ...) are **strings**; amounts are **strings** of base units
       (7 decimals: `"50000000"` = 5 tokens).
-    - Errors are always `{ "error": { "code": "...", "message": "..." } }`. `code` is stable; `message` is for people.
+    - Errors are always `{ "error": { "code": "...", "message": "...", "requestId": "..." } }`. `code` is stable; `message` is for people; `requestId` matches the `x-request-id` response header.
     - Sessions are an `HttpOnly` cookie (`se_session`). Every state-changing request also needs the CSRF token from
       `GET /auth/me` in the `X-CSRF-Token` header.
     - Cursor pagination: pass the previous page's `nextCursor`.
@@ -523,8 +523,11 @@ components:
       properties:
         error:
           type: object
-          required: [code, message]
+          required: [code, message, requestId]
           properties:
+            requestId:
+              type: string
+              description: The same id returned in the `x-request-id` response header.
             code:
               type: string
               description: |

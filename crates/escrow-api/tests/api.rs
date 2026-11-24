@@ -198,7 +198,8 @@ async fn every_response_carries_the_security_headers_and_errors_use_one_shape(po
     let e = env(pool, true, vec![]);
     let r = get(&e, "/bounties/abc").await;
     assert_eq!(r.status, StatusCode::NOT_FOUND);
-    assert_eq!(r.body, json!({ "error": { "code": "not_found", "message": "bounty not found" } }));
+    let request_id = r.headers["x-request-id"].to_str().unwrap().to_string();
+    assert_eq!(r.body, json!({ "error": { "code": "not_found", "message": "bounty not found", "requestId": request_id } }));
     let h = &r.headers;
     assert_eq!(h["x-content-type-options"], "nosniff");
     assert_eq!(h["x-frame-options"], "DENY");
@@ -207,6 +208,23 @@ async fn every_response_carries_the_security_headers_and_errors_use_one_shape(po
     assert!(h["content-security-policy"].to_str().unwrap().contains("default-src 'none'"));
     let unknown = get(&e, "/nope").await;
     assert_eq!((unknown.status, unknown.body["error"]["code"].clone()), (StatusCode::NOT_FOUND, json!("not_found")));
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn request_ids_are_returned_and_included_in_errors(pool: PgPool) {
+    let e = env(pool, true, vec![]);
+    let ok = get(&e, "/health").await;
+    assert!(ok.headers.contains_key("x-request-id"), "every response carries a request id");
+
+    let r = call(&e.app, Method::GET, "/bounties/abc", &[("x-request-id", "req-123_ABC.def~".to_string())], None).await;
+    assert_eq!(r.status, StatusCode::NOT_FOUND);
+    assert_eq!(r.headers["x-request-id"], "req-123_ABC.def~");
+    assert_eq!(r.body["error"]["requestId"], "req-123_ABC.def~");
+
+    let bad = call(&e.app, Method::GET, "/bounties/abc", &[("x-request-id", "a".repeat(200))], None).await;
+    let generated = bad.headers["x-request-id"].to_str().unwrap();
+    assert_ne!(generated, "a".repeat(200), "a malformed id is replaced");
+    assert_eq!(bad.body["error"]["requestId"], json!(generated));
 }
 
 #[sqlx::test(migrator = "MIGRATOR")]

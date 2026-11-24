@@ -118,9 +118,10 @@ pub async fn run_queue(w: Arc<WorkerDeps>, stop: CancellationToken, concurrency:
 
 async fn run_one(w: &WorkerDeps, job: &Job, worker: usize) {
     let pool = &w.db.pool;
+    let delivery_id = job.payload.get("id").and_then(|v| v.as_str()).unwrap_or("");
     match handle_job(w, job).await {
         Ok(label) => {
-            tracing::info!(worker, job = job.id, kind = %job.kind, %label, "job done");
+            tracing::info!(worker, job = job.id, kind = %job.kind, delivery_id, %label, "job done");
             if let Err(e) = jobs::complete(pool, job.id).await {
                 tracing::error!(job = job.id, error = %e, "could not mark the job done");
             }
@@ -131,15 +132,15 @@ async fn run_one(w: &WorkerDeps, job: &Job, worker: usize) {
             if let Some(at) = e.retry_at() {
                 wait = wait.max((at - Utc::now()).num_seconds().max(1));
             }
-            tracing::warn!(worker, job = job.id, kind = %job.kind, attempt = job.attempts, error = %e, retry_in_secs = wait, "job failed, will retry");
+            tracing::warn!(worker, job = job.id, kind = %job.kind, delivery_id, attempt = job.attempts, error = %e, retry_in_secs = wait, "job failed, will retry");
             match jobs::fail(pool, job.id, &e.to_string(), wait).await {
-                Ok(true) => tracing::error!(job = job.id, kind = %job.kind, "job gave up after its last attempt"),
+                Ok(true) => tracing::error!(job = job.id, kind = %job.kind, delivery_id, "job gave up after its last attempt"),
                 Ok(false) => {}
                 Err(db) => tracing::error!(job = job.id, error = %db, "could not record the failure"),
             }
         }
         Err(e) => {
-            tracing::error!(worker, job = job.id, kind = %job.kind, error = %e, "job can never succeed; parked as dead");
+            tracing::error!(worker, job = job.id, kind = %job.kind, delivery_id, error = %e, "job can never succeed; parked as dead");
             let _ = jobs::bury(pool, job.id, &e.to_string()).await;
         }
     }
