@@ -53,6 +53,11 @@ pub async fn relayer_pass(
     now: Instant,
 ) -> Result<usize, PayoutError> {
     let due = payouts::due(&d.db.pool, 20).await?;
+    // #102: a payout confirmed by the indexer (`confirm_from_chain`) while its retry entry is
+    // still in the table never returns here; the entry would otherwise live for the lifetime of
+    // the process. Keep only ids that are still due; everything else is settled or gone.
+    let due_ids: std::collections::HashSet<&str> = due.iter().map(|p| p.id.as_str()).collect();
+    retry_at.retain(|id, _| due_ids.contains(id.as_str()));
     let ready: Vec<_> = due.into_iter().filter(|p| !retry_at.get(&p.id).is_some_and(|t| *t > now)).collect();
     let width = signer.max_parallel().max(1);
     let mut attempted = 0;

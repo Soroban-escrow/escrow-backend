@@ -101,6 +101,7 @@ pub fn router(state: AppState) -> Router {
         .route("/admin/disputes/{id}/reject", post(admin::reject))
         .route("/admin/payouts", get(admin::list_payouts))
         .route("/admin/payouts/{id}/retry", post(admin::retry_payout))
+        .route("/admin/payouts/{id}/reconcile", post(admin::reconcile_payout))
         .route("/admin/status", get(admin::status))
         .route("/admin/repos/{id}/ai-reviews", put(admin::set_ai_reviews))
         .route("/github/webhooks", post(webhook::receive).layer(DefaultBodyLimit::max(WEBHOOK_BODY_LIMIT)))

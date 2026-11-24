@@ -158,7 +158,20 @@ pub async fn apply_event(conn: &mut PgConnection, ev: &ChainEvent, meta: &EventM
             }
             let winner_user = users::by_wallet(&mut *conn, winner).await?.map(|u| u.github_id);
             bounties::apply_released(&mut *conn, id, meta.event_id, meta.tx_hash, winner, winner_user).await?;
-            payouts::confirm_from_chain(&mut *conn, id, meta.tx_hash, winner).await?;
+            // #105: audit the payout transition inside the same transaction as the UPDATE.
+            // confirm_from_chain_returning captures the pre-UPDATE status via a CTE so the
+            // "from" field is correct and the audit row commits atomically with the write.
+            let confirmed = payouts::confirm_from_chain_returning(&mut *conn, id, meta.tx_hash, winner).await?;
+            for (payout_id, prev_status) in confirmed {
+                audit::log(
+                    &mut *conn,
+                    "indexer",
+                    "payout.confirmed",
+                    &format!("payout:{payout_id}"),
+                    &json!({ "from": prev_status, "to": "CONFIRMED", "txHash": meta.tx_hash, "error": serde_json::Value::Null }),
+                )
+                .await?;
+            }
         }
         ChainEvent::Refunded { .. } => {
             if status != escrow_core::BountyStatus::Open {

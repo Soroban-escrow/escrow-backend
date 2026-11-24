@@ -421,6 +421,86 @@ async fn a_pass_pays_queued_payouts_and_backs_off_failures(pool: PgPool) {
     );
 }
 
+/// #105: a full relayed release leaves an audit trail - PENDING_WALLET → QUEUED → SUBMITTED
+/// → CONFIRMED - with the tx hash recorded on the submitted and confirmed rows.
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn a_full_relayed_release_audits_each_status_transition(pool: PgPool) {
+    use escrow_db::audit;
+    let e = env(pool.clone()).await;
+    queued(&e).await;
+    assert_eq!(relay_release(&e.d, &*e.signer, 4).await.unwrap(), RelayResult::Confirmed);
+
+    let payout_id = payouts::for_bounty(&pool, 4).await.unwrap().unwrap().id;
+    let target = format!("payout:{payout_id}");
+    // audit::recent is newest-first; the trail for this payout is QUEUED, SUBMITTED, CONFIRMED
+    // (there is no PENDING_WALLET entry because the wallet was linked before the merge).
+    let rows: Vec<_> = audit::recent(&pool, 100).await.unwrap().into_iter().filter(|r| r.target == target).collect();
+    let actions: Vec<_> = rows.iter().rev().map(|r| r.action.as_str()).collect();
+    assert_eq!(actions, ["payout.queued", "payout.submitted", "payout.confirmed"]);
+
+    // The SUBMITTED entry must carry the tx hash; the CONFIRMED entry must carry it too.
+    let submitted = rows.iter().find(|r| r.action == "payout.submitted").unwrap();
+    let confirmed = rows.iter().find(|r| r.action == "payout.confirmed").unwrap();
+    assert_eq!(submitted.data["txHash"], serde_json::Value::String("hash-1".into()));
+    assert_eq!(submitted.data["from"], "QUEUED");
+    assert_eq!(submitted.data["to"], "SUBMITTED");
+    assert_eq!(confirmed.data["txHash"], serde_json::Value::String("hash-1".into()));
+    assert_eq!(confirmed.data["from"], "SUBMITTED");
+    assert_eq!(confirmed.data["to"], "CONFIRMED");
+}
+
+/// #105: a deterministic rejection records a FAILED audit entry with the error message
+/// (no internal contract code leaks through say(); the audit trail is operator-facing).
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn a_rejected_release_audits_the_failed_transition_with_the_error(pool: PgPool) {
+    use escrow_db::audit;
+    let e = env(pool.clone()).await;
+    queued(&e).await;
+    e.signer.submits.lock().unwrap().push_back(Err(ChainError::Simulation("HostError: Error(Contract, #17)".into())));
+    assert_eq!(relay_release(&e.d, &*e.signer, 4).await.unwrap(), RelayResult::Failed);
+
+    let payout_id = payouts::for_bounty(&pool, 4).await.unwrap().unwrap().id;
+    let target = format!("payout:{payout_id}");
+    let rows: Vec<_> = audit::recent(&pool, 100).await.unwrap().into_iter().filter(|r| r.target == target).collect();
+    let failed = rows.iter().find(|r| r.action == "payout.failed").expect("payout.failed logged");
+    assert_eq!(failed.data["from"], "QUEUED");
+    assert_eq!(failed.data["to"], "FAILED");
+    assert!(failed.data["error"].as_str().unwrap_or("").contains("#17"), "error is in the audit entry: {}", failed.data);
+}
+
+/// #102: a payout that the indexer confirmed while the row was backing off must not keep its
+/// RetryTable entry alive forever. The next pass should prune ids whose payouts are no longer
+/// returned by `payouts::due` (confirmed, refunded, deleted - anything).
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn retry_table_entries_for_no_longer_due_payouts_are_pruned(pool: PgPool) {
+    let e = env(pool.clone()).await;
+    queued(&e).await;
+    let mut retry = RetryTable::new();
+    let t0 = Instant::now();
+
+    // First pass: a transient failure parks the payout in the retry table.
+    e.signer.submits.lock().unwrap().push_back(Err(ChainError::Busy));
+    assert_eq!(relayer_pass(&e.d, &*e.signer, &mut retry, t0).await.unwrap(), 1);
+    assert_eq!(retry.len(), 1, "the failed payout is backing off");
+    let payout_id = payouts::for_bounty(&pool, 4).await.unwrap().unwrap().id;
+    assert!(retry.contains_key(&payout_id));
+
+    // Simulate the indexer confirming the payout from a release event while the row was
+    // waiting: status moves to CONFIRMED, `payouts::due` no longer returns it.
+    payouts::confirm_from_chain(&pool, 4, "e2e-tx", WINNER).await.unwrap();
+    assert_eq!(status(&pool).await, "CONFIRMED");
+
+    // The next pass must prune the stale entry even if the clock has not advanced past the
+    // backoff window. With no due payouts there is no work to attempt, but the hygiene step
+    // runs regardless of whether the backoff has elapsed.
+    assert_eq!(
+        relayer_pass(&e.d, &*e.signer, &mut retry, t0 + std::time::Duration::from_secs(1)).await.unwrap(),
+        0,
+        "nothing due"
+    );
+    assert!(retry.is_empty(), "stale entry pruned - was: {retry:?}");
+}
+
 #[sqlx::test(migrator = "MIGRATOR")]
 async fn one_bad_payout_does_not_block_the_others(pool: PgPool) {
     let e = env(pool.clone()).await;

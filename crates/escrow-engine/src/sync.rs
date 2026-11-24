@@ -13,7 +13,7 @@ use escrow_core::{
 use escrow_db::{
     Db, audit, bounties, github as gh_repo,
     models::{Bounty, Repo},
-    payout_reminders, payouts, prs,
+    payout_reminders, payouts, prs, users,
 };
 use escrow_github::GithubApi;
 use escrow_payouts::Notifier;
@@ -244,14 +244,22 @@ pub async fn send_refund_reminders(
         if audit::exists(&db.pool, &action, &target).await? {
             continue;
         }
+        // #103: prefix the reminder with an @mention when we know the maintainer's login, so
+        // the person who needs to act is pinged on GitHub rather than relying on them watching
+        // the issue. A missing login (unlinked maintainer wallet, closed account) leaves the
+        // text unchanged - the reminder still goes out, just without the mention.
+        let mention = match b.maintainer_github_id {
+            Some(id) => users::by_github_id(&db.pool, id).await?.map(|u| format!("@{} ", u.github_login)).unwrap_or_default(),
+            None => String::new(),
+        };
         let body = if kind == "soon" {
             format!(
-                "The refund window for this bounty opens in under 48 hours. If a PR was merged but not yet paid, resolve it at {web_url}/b/{}; otherwise the maintainer may reclaim the funds.",
+                "{mention}The refund window for this bounty opens in under 48 hours. If a PR was merged but not yet paid, resolve it at {web_url}/b/{}; otherwise the maintainer may reclaim the funds.",
                 b.id
             )
         } else {
             format!(
-                "The refund window for this bounty is now open. The maintainer can reclaim the funds at {web_url}/me. A merged PR can still be released until then."
+                "{mention}The refund window for this bounty is now open. The maintainer can reclaim the funds at {web_url}/me. A merged PR can still be released until then."
             )
         };
         if let Err(e) = commenter.comment(b.id, &body).await {

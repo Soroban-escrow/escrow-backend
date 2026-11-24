@@ -1,7 +1,8 @@
 use crate::ports::{Notifier, PayoutError};
 use escrow_chain::{ChainReader, ReleaseSigner, TxOutcome};
 use escrow_core::BountyStatus;
-use escrow_db::{Db, payouts, users};
+use escrow_db::{Db, audit, payouts, users};
+use serde_json::json;
 use std::sync::Arc;
 
 pub const MAX_ATTEMPTS: i32 = 5;
@@ -54,6 +55,32 @@ async fn say(d: &PayoutDeps, bounty: i64, pr: i32, msg: &str) {
     }
 }
 
+/// #105: records a payout status transition in the audit log. Best-effort - an audit write
+/// failure is logged and does not propagate, so a payout never fails because the audit trail
+/// is unavailable. Called adjacent to each `payouts::mark_*` in this module; the indexer's
+/// confirm-from-chain path audits inside the same database transaction as the UPDATE.
+pub(crate) async fn audit_payout_transition(
+    d: &PayoutDeps,
+    payout_id: &str,
+    from_status: &str,
+    to_status: &str,
+    tx_hash: Option<&str>,
+    error: Option<&str>,
+) {
+    let data = json!({
+        "from": from_status,
+        "to": to_status,
+        "txHash": tx_hash,
+        "error": error,
+    });
+    if let Err(e) =
+        audit::log(&d.db.pool, "payout", &format!("payout.{}", to_status.to_ascii_lowercase()), &format!("payout:{payout_id}"), &data)
+            .await
+    {
+        tracing::warn!(payout = %payout_id, error = %e, "payout transition audit write failed (best effort)");
+    }
+}
+
 /// A linked PR was merged. First merge wins: one payout per bounty. Re-reads the bounty from the chain first.
 pub async fn on_merge(d: &PayoutDeps, bounty_id: i64, pr_number: i32, author_github_id: i64) -> Result<MergeOutcome, PayoutError> {
     if d.chain.get_bounty(id_u64(bounty_id)).await?.status != BountyStatus::Open {
@@ -86,6 +113,7 @@ pub async fn advance(d: &PayoutDeps, bounty_id: i64) -> Result<Advance, PayoutEr
     };
     if wallet == chain.maintainer {
         payouts::mark_failed(&d.db.pool, &p.id, "winner is the maintainer", false).await?;
+        audit_payout_transition(d, &p.id, &p.status, "FAILED", None, Some("winner is the maintainer")).await;
         return Ok(Advance::Failed);
     }
     let next = if chain.relayer_allowed { "QUEUED" } else { "AWAITING_MAINTAINER" };
@@ -93,6 +121,7 @@ pub async fn advance(d: &PayoutDeps, bounty_id: i64) -> Result<Advance, PayoutEr
     if !payouts::release_from_pending(&d.db.pool, &p.id, next, &wallet).await? {
         return Ok(Advance::Raced);
     }
+    audit_payout_transition(d, &p.id, &p.status, next, None, None).await;
     if next == "AWAITING_MAINTAINER" {
         say(d, bounty_id, p.pr_number, &format!("The maintainer must release this bounty at {}/b/{bounty_id}.", d.web_url)).await;
         return Ok(Advance::AwaitingMaintainer);
@@ -136,11 +165,13 @@ pub async fn relay_release(d: &PayoutDeps, signer: &dyn ReleaseSigner, bounty_id
     let chain = d.chain.get_bounty(id_u64(bounty_id)).await?;
     if chain.status == BountyStatus::Released && chain.winner.as_deref() == Some(winner.as_str()) {
         payouts::mark_confirmed(pool, &p.id, None).await?;
+        audit_payout_transition(d, &p.id, &p.status, "CONFIRMED", p.tx_hash.as_deref(), None).await;
         return Ok(RelayResult::Confirmed);
     }
     if chain.status != BountyStatus::Open || !chain.relayer_allowed {
         let why = format!("bounty is {}, relayerAllowed={}", chain.status, chain.relayer_allowed);
         payouts::mark_failed(pool, &p.id, &why, false).await?;
+        audit_payout_transition(d, &p.id, &p.status, "FAILED", None, Some(&why)).await;
         return Ok(RelayResult::Failed);
     }
 
@@ -150,6 +181,7 @@ pub async fn relay_release(d: &PayoutDeps, signer: &dyn ReleaseSigner, bounty_id
     };
     // Record the hash BEFORE waiting, so a crash never leads to a second submission.
     payouts::mark_submitted(pool, &p.id, &hash).await?;
+    audit_payout_transition(d, &p.id, &p.status, "SUBMITTED", Some(&hash), None).await;
     let p = payouts::get(pool, &p.id).await?.unwrap_or(p);
     settle(d, signer, &p, &winner, &hash).await
 }
@@ -166,10 +198,12 @@ async fn settle(
         Ok(TxOutcome::Success) => {
             // The "Paid X to @login" comment is posted when the indexer sees the release event (covers every release path).
             payouts::mark_confirmed(pool, &p.id, Some(hash)).await?;
+            audit_payout_transition(d, &p.id, &p.status, "CONFIRMED", Some(hash), None).await;
             Ok(RelayResult::Confirmed)
         }
         Ok(TxOutcome::Failed) => {
             payouts::mark_failed(pool, &p.id, "transaction failed on chain", false).await?;
+            audit_payout_transition(d, &p.id, &p.status, "FAILED", p.tx_hash.as_deref(), Some("transaction failed on chain")).await;
             Ok(RelayResult::Failed)
         }
         Ok(TxOutcome::NotFound) => {
@@ -181,13 +215,17 @@ async fn settle(
             let chain = d.chain.get_bounty(id_u64(p.bounty_id)).await?;
             if chain.status == BountyStatus::Released && chain.winner.as_deref() == Some(winner) {
                 payouts::mark_confirmed(pool, &p.id, None).await?;
+                audit_payout_transition(d, &p.id, &p.status, "CONFIRMED", p.tx_hash.as_deref(), None).await;
                 return Ok(RelayResult::Confirmed);
             }
             if chain.status == BountyStatus::Open {
                 payouts::requeue(pool, &p.id).await?;
+                audit_payout_transition(d, &p.id, &p.status, "QUEUED", p.tx_hash.as_deref(), Some("submitted transaction expired; resubmitting")).await;
                 return Err(PayoutError::Transient("submitted transaction expired; resubmitting".into()));
             }
-            payouts::mark_failed(pool, &p.id, &format!("bounty became {} while waiting", chain.status), false).await?;
+            let why = format!("bounty became {} while waiting", chain.status);
+            payouts::mark_failed(pool, &p.id, &why, false).await?;
+            audit_payout_transition(d, &p.id, &p.status, "FAILED", p.tx_hash.as_deref(), Some(&why)).await;
             Ok(RelayResult::Failed)
         }
         Err(e) => fail(d, p, false, e.to_string()).await,
@@ -198,6 +236,7 @@ async fn settle(
 async fn fail(d: &PayoutDeps, p: &escrow_db::Payout, deterministic: bool, msg: String) -> Result<RelayResult, PayoutError> {
     if deterministic || p.attempts + 1 >= MAX_ATTEMPTS {
         payouts::mark_failed(&d.db.pool, &p.id, &msg, true).await?;
+        audit_payout_transition(d, &p.id, &p.status, "FAILED", p.tx_hash.as_deref(), Some(&msg)).await;
         return Ok(RelayResult::Failed);
     }
     payouts::record_attempt_error(&d.db.pool, &p.id, &msg).await?;
