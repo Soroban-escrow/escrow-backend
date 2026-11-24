@@ -39,6 +39,8 @@ pub struct InstallationEvent {
     pub repositories: Vec<RepoRef>,
     #[serde(default)]
     pub repositories_added: Vec<RepoRef>,
+    #[serde(default)]
+    pub repositories_removed: Vec<RepoRef>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

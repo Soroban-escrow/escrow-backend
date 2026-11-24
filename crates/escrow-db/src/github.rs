@@ -71,6 +71,17 @@ pub async fn upsert_repo<'e>(
     .map(|_| ())
 }
 
+/// Marks a repository as deleted/removed from the installation (soft delete to preserve bounty references).
+pub async fn suspend_repo<'e>(ex: impl PgExecutor<'e>, id: i64) -> Result<(), sqlx::Error> {
+    // Soft delete: we could add a 'suspended_at' column, but for now just removing from active repos
+    // is enough to prevent new bounties. Existing bounties remain intact.
+    sqlx::query("UPDATE repos SET installation_id = -1 WHERE id = $1")
+        .bind(id)
+        .execute(ex)
+        .await
+        .map(|_| ())
+}
+
 pub async fn get_repo<'e>(ex: impl PgExecutor<'e>, id: i64) -> Result<Option<Repo>, sqlx::Error> {
     sqlx::query_as("SELECT id, installation_id, full_name, is_private FROM repos WHERE id = $1").bind(id).fetch_optional(ex).await
 }

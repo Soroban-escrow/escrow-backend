@@ -29,17 +29,12 @@ impl AnthropicModel {
     }
 
     pub fn with_base(api_key: &str, model: &str, base: &str) -> Self {
-        let http = reqwest::Client::builder()
-            .timeout(Duration::from_secs(120))
-            .user_agent(escrow_core::USER_AGENT)
-            .build()
-            .expect("client builds");
         Self::with_base_and_timeout(api_key, model, base, DEFAULT_TIMEOUT)
     }
 
     pub fn with_base_and_timeout(api_key: &str, model: &str, base: &str, timeout: Duration) -> Self {
         let http =
-            reqwest::Client::builder().timeout(timeout).user_agent("skillescrow-backend").build().expect("client builds");
+            reqwest::Client::builder().timeout(timeout).user_agent(escrow_core::USER_AGENT).build().expect("client builds");
         Self { http, api_key: api_key.into(), model: model.into(), base: base.trim_end_matches('/').into() }
     }
 }
