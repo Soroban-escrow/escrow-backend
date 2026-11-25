@@ -1,0 +1,52 @@
+# Nightly merge-to-payout run on testnet (issue #5). It runs `escrowd e2e`, which drives the full
+# path (issue, funding, merge, payout, replay check, cleanup) against testnet and a sandbox GitHub repo.
+#
+# Repository secrets it references (names only; values are never printed):
+#   TESTNET_RELAYER_SECRET       Stellar secret (S...) of the testnet relayer account
+#   TESTNET_FUNDER_SECRET        Stellar secret (S...) of a funded throwaway testnet account
+#   E2E_DATABASE_URL             Postgres URL for a throwaway database used only by this run
+#   E2E_GITHUB_APP_ID            sandbox GitHub App id
+#   E2E_GITHUB_APP_SLUG          sandbox GitHub App slug
+#   E2E_GITHUB_APP_PRIVATE_KEY   sandbox GitHub App private key (PEM)
+#   E2E_GITHUB_CLIENT_ID         sandbox GitHub App OAuth client id
+#   E2E_GITHUB_CLIENT_SECRET     sandbox GitHub App OAuth client secret
+#
+# Repository variable: E2E_ENABLED=true turns the job on. It stays off until `escrowd e2e` is merged.
+name: e2e-nightly
+
+on:
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    if: vars.E2E_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      STELLAR_NETWORK: testnet
+      RELAYER_SECRET: ${{ secrets.TESTNET_RELAYER_SECRET }}
+      E2E_FUNDER_SECRET: ${{ secrets.TESTNET_FUNDER_SECRET }}
+      DATABASE_URL: ${{ secrets.E2E_DATABASE_URL }}
+      GITHUB_APP_ID: ${{ secrets.E2E_GITHUB_APP_ID }}
+      GITHUB_APP_SLUG: ${{ secrets.E2E_GITHUB_APP_SLUG }}
+      GITHUB_APP_PRIVATE_KEY: ${{ secrets.E2E_GITHUB_APP_PRIVATE_KEY }}
+      GITHUB_CLIENT_ID: ${{ secrets.E2E_GITHUB_CLIENT_ID }}
+      GITHUB_CLIENT_SECRET: ${{ secrets.E2E_GITHUB_CLIENT_SECRET }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-
+      - run: rustup show active-toolchain || rustup toolchain install
+      - name: Merge-to-payout on testnet
+        run: cargo run --locked -p escrowd -- e2e

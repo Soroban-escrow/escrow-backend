@@ -1,12 +1,19 @@
-node_modules/
-dist/
-coverage/
-.env*
+# build output
+/target/
+**/*.rs.bk
+
+# secrets and local config: never commit these
+.env
+.env.*
 !.env.example
-*.log
-*.tsbuildinfo
+*.pem
+*.key
+
+# editors and OS
 .DS_Store
-test-results/
-playwright-report/
-blob-report/
-playwright/.cache/
+.idea/
+.vscode/
+
+# local databases and logs
+*.log
+pgdata/
