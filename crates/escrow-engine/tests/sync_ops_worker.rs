@@ -191,18 +191,18 @@ async fn refund_reminders_go_out_once_each_at_the_right_time(pool: PgPool) {
     let deadline = bounties::get(&pool, 4).await.unwrap().unwrap().deadline;
     let send = |at| send_refund_reminders(&w.db, &commenter, grace, "https://app.example", at);
 
-    assert!(send(Utc::now()).await.unwrap().is_empty(), "weeks before the window: silent");
+    assert!(send(Utc::now()).await.unwrap().sent.is_empty(), "weeks before the window: silent");
     let soon = deadline + grace - Duration::hours(47);
-    assert_eq!(send(soon).await.unwrap(), ["soon:4"]);
-    assert!(send(soon + Duration::minutes(5)).await.unwrap().is_empty(), "not twice");
+    assert_eq!(send(soon).await.unwrap().sent, ["soon:4"]);
+    assert!(send(soon + Duration::minutes(5)).await.unwrap().sent.is_empty(), "not twice");
     let open = deadline + grace + Duration::minutes(1);
-    assert_eq!(send(open).await.unwrap(), ["open:4"]);
-    assert!(send(open + Duration::hours(5)).await.unwrap().is_empty());
+    assert_eq!(send(open).await.unwrap().sent, ["open:4"]);
+    assert!(send(open + Duration::hours(5)).await.unwrap().sent.is_empty());
     let b = w.gh.bodies();
     assert!(b[0].contains("opens in under 48 hours") && b[1].contains("is now open"));
     // closed bounties get none
     bounties::apply_refunded(&pool, 4, "e", "t").await.unwrap();
-    assert!(send(open + Duration::days(9)).await.unwrap().is_empty());
+    assert!(send(open + Duration::days(9)).await.unwrap().sent.is_empty());
 }
 
 struct FlakyCommenter(Mutex<u32>);
@@ -222,9 +222,46 @@ async fn a_reminder_whose_comment_failed_is_retried_not_forgotten(pool: PgPool) 
     let deadline = bounties::get(&pool, 4).await.unwrap().unwrap().deadline;
     let c = FlakyCommenter(Mutex::new(0));
     let at = deadline + Duration::hours(72) + Duration::minutes(1);
-    assert!(send_refund_reminders(&w.db, &c, Duration::hours(72), "w", at).await.is_err());
+    let first = send_refund_reminders(&w.db, &c, Duration::hours(72), "w", at).await.unwrap();
+    assert_eq!((first.sent.len(), first.failed.len()), (0, 1), "the failure is reported, not fatal");
     assert!(!audit::exists(&pool, "reminder.refund_open", "bounty:4").await.unwrap(), "only marked sent after the comment succeeded");
-    assert_eq!(send_refund_reminders(&w.db, &c, Duration::hours(72), "w", at).await.unwrap(), ["open:4"]);
+    assert_eq!(send_refund_reminders(&w.db, &c, Duration::hours(72), "w", at).await.unwrap().sent, ["open:4"]);
+}
+
+struct FailingFor {
+    fail_id: i64,
+    attempted: Mutex<Vec<i64>>,
+}
+
+#[async_trait]
+impl IssueCommenter for FailingFor {
+    async fn comment(&self, bounty_id: i64, _body: &str) -> Result<(), escrow_engine::EngineError> {
+        self.attempted.lock().unwrap().push(bounty_id);
+        if bounty_id == self.fail_id {
+            Err(GithubError::Status { status: 403, what: "revoked installation".into() }.into())
+        } else {
+            Ok(())
+        }
+    }
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn one_failing_comment_does_not_stop_later_refund_reminders(pool: PgPool) {
+    let w = world(pool.clone()).await;
+    open_bounty(&w, 4, 3).await;
+    open_bounty(&w, 5, 4).await;
+    open_bounty(&w, 6, 5).await;
+    let deadline = bounties::get(&pool, 4).await.unwrap().unwrap().deadline;
+    let at = deadline + Duration::hours(72) + Duration::minutes(1);
+    let c = FailingFor { fail_id: 5, attempted: Mutex::new(vec![]) };
+    let outcome = send_refund_reminders(&w.db, &c, Duration::hours(72), "w", at).await.unwrap();
+    assert_eq!(c.attempted.lock().unwrap().len(), 3, "every bounty was attempted in this pass");
+    let mut sent = outcome.sent.clone();
+    sent.sort();
+    assert_eq!(sent, ["open:4", "open:6"], "the other bounties still got their reminders");
+    assert_eq!(outcome.failed, ["open:5"], "the failing bounty is reported");
+    assert!(!audit::exists(&pool, "reminder.refund_open", "bounty:5").await.unwrap(), "failed reminder stays retryable");
+    assert!(audit::exists(&pool, "reminder.refund_open", "bounty:4").await.unwrap(), "successful ones are recorded");
 }
 
 // ---------------- installations backfill ----------------

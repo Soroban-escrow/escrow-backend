@@ -193,16 +193,25 @@ impl IssueCommenter for GithubCommenter {
     }
 }
 
+/// What one reminder pass achieved. Failures are reported so the caller can alert on them; they are
+/// retried on the next tick because a failed comment is never marked as sent in the audit log.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct RefundRemindersOutcome {
+    pub sent: Vec<String>,
+    pub failed: Vec<String>,
+}
+
 /// Refund reminders: one 48 h before the refund window opens (deadline + grace), one when it opens.
 /// Each is sent at most once, recorded in the audit log AFTER the comment succeeds (a failed comment is retried next tick).
+/// One failing comment is logged and counted, but never stops the other bounties in the same pass.
 pub async fn send_refund_reminders(
     db: &Db,
     commenter: &dyn IssueCommenter,
     grace: Duration,
     web_url: &str,
     now: DateTime<Utc>,
-) -> Result<Vec<String>, EngineError> {
-    let mut sent = vec![];
+) -> Result<RefundRemindersOutcome, EngineError> {
+    let mut outcome = RefundRemindersOutcome::default();
     for b in bounties::open_ones(&db.pool).await? {
         let opens_at = b.deadline + grace;
         let kind = if now >= opens_at {
@@ -226,11 +235,21 @@ pub async fn send_refund_reminders(
                 "The refund window for this bounty is now open. The maintainer can reclaim the funds at {web_url}/me. A merged PR can still be released until then."
             )
         };
-        commenter.comment(b.id, &body).await?;
-        audit::log(&db.pool, "system", &action, &target, &serde_json::json!({})).await?;
-        sent.push(format!("{kind}:{}", b.id));
+        let label = format!("{kind}:{}", b.id);
+        match commenter.comment(b.id, &body).await {
+            Ok(()) => {
+                audit::log(&db.pool, "system", &action, &target, &serde_json::json!({})).await?;
+                outcome.sent.push(label);
+            }
+            Err(e) => {
+                // A revoked installation or a deleted issue must not stop reminders for every other
+                // bounty. Leave the audit trail untouched so the next hourly tick retries this one.
+                tracing::warn!(bounty = b.id, error = %e, "refund reminder failed; will retry next tick");
+                outcome.failed.push(label);
+            }
+        }
     }
-    Ok(sent)
+    Ok(outcome)
 }
 
 /// Wallet reminder stages after a PR merge while its payout waits for a wallet: name and hours after the merge.
