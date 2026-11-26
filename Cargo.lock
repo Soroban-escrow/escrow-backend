@@ -924,6 +924,7 @@ dependencies = [
  "escrow-chain",
  "escrow-core",
  "escrow-db",
+ "serde_json",
  "sqlx",
  "thiserror",
  "tokio",

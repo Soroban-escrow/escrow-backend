@@ -1104,9 +1104,12 @@ async fn admin_routes_refuse_everyone_but_admins(pool: PgPool) {
         let r = call(&e.app, Method::GET, uri, &user.hdrs(false), None).await;
         assert_eq!((r.status, r.body["error"]["code"].clone()), (StatusCode::FORBIDDEN, json!("forbidden")), "{uri}");
     }
-    for uri in
-        ["/admin/disputes/abcdefghij1234/open-onchain", "/admin/disputes/abcdefghij1234/reject", "/admin/payouts/abcdefghij1234/retry"]
-    {
+    for uri in [
+        "/admin/disputes/abcdefghij1234/open-onchain",
+        "/admin/disputes/abcdefghij1234/reject",
+        "/admin/payouts/abcdefghij1234/retry",
+        "/admin/payouts/abcdefghij1234/reconcile",
+    ] {
         assert_eq!(
             call(&e.app, Method::POST, uri, &user.hdrs(true), Some(json!({ "arbiterAddress": "x", "note": "x" }))).await.status,
             StatusCode::FORBIDDEN,
@@ -1439,6 +1442,104 @@ async fn failed_payouts_can_be_listed_and_retried_but_not_when_a_transaction_exi
         "no longer FAILED"
     );
     assert_eq!(call(&e.app, Method::POST, "/admin/payouts/NOT-AN-ID/retry", &admin.hdrs(true), None).await.status, StatusCode::NOT_FOUND);
+}
+
+/// #104: a FAILED payout whose on-chain release landed reconciles to CONFIRMED.
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn reconcile_confirms_a_payout_whose_release_landed(pool: PgPool) {
+    let e = env(pool.clone(), true, vec![]);
+    fund(&e, 4, 3).await;
+    let admin = signed_in(&e, 1, "arb", None, true).await;
+    let p = payouts::create_pending(&pool, 4, 7, 900).await.unwrap().unwrap();
+    payouts::release_from_pending(&pool, &p.id, "QUEUED", "GWIN").await.unwrap();
+    payouts::mark_submitted(&pool, &p.id, "landedhash").await.unwrap();
+    payouts::mark_failed(&pool, &p.id, "transaction failed on chain", false).await.unwrap();
+    // chain says it actually landed to GWIN
+    e.chain.put(4, seed::MAINTAINER_WALLET, BountyStatus::Released, true, Some("GWIN"));
+
+    let r = call(&e.app, Method::POST, &format!("/admin/payouts/{}/reconcile", p.id), &admin.hdrs(true), None).await;
+    assert_eq!(r.status, StatusCode::OK);
+    assert_eq!(r.body["outcome"], "confirmed");
+    assert_eq!(r.body["chainStatus"], "RELEASED");
+    assert_eq!(r.body["txHash"], "landedhash");
+
+    let row = payouts::get(&pool, &p.id).await.unwrap().unwrap();
+    assert_eq!((row.status.as_str(), row.tx_hash.as_deref()), ("CONFIRMED", Some("landedhash")));
+
+    // audit-logged
+    assert!(
+        escrow_db::audit::exists(&pool, "payout.reconcile", &format!("payout:{}", p.id)).await.unwrap(),
+        "reconcile audit entry"
+    );
+}
+
+/// #104: tx is gone and the bounty is still OPEN → requeue (hash cleared, status QUEUED).
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn reconcile_requeues_when_the_bounty_is_still_open(pool: PgPool) {
+    let e = env(pool.clone(), true, vec![]);
+    fund(&e, 4, 3).await;
+    let admin = signed_in(&e, 1, "arb", None, true).await;
+    let p = payouts::create_pending(&pool, 4, 7, 900).await.unwrap().unwrap();
+    payouts::release_from_pending(&pool, &p.id, "QUEUED", "GWIN").await.unwrap();
+    payouts::mark_submitted(&pool, &p.id, "expiredhash").await.unwrap();
+    payouts::mark_failed(&pool, &p.id, "transaction expired", false).await.unwrap();
+    // chain is still Open (the tx was never seen)
+
+    let r = call(&e.app, Method::POST, &format!("/admin/payouts/{}/reconcile", p.id), &admin.hdrs(true), None).await;
+    assert_eq!(r.status, StatusCode::OK);
+    assert_eq!(r.body["outcome"], "requeued");
+    assert_eq!(r.body["chainStatus"], "OPEN");
+
+    let row = payouts::get(&pool, &p.id).await.unwrap().unwrap();
+    assert_eq!((row.status.as_str(), row.tx_hash.as_deref(), row.attempts), ("QUEUED", None, 0));
+}
+
+/// #104: bounty is refunded / disputed / resolved → the API reports what it found and leaves
+/// the payout FAILED so the operator can route via the arbiter or refund path.
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn reconcile_reports_when_the_bounty_is_no_longer_ours_to_release(pool: PgPool) {
+    let e = env(pool.clone(), true, vec![]);
+    fund(&e, 4, 3).await;
+    let admin = signed_in(&e, 1, "arb", None, true).await;
+    let p = payouts::create_pending(&pool, 4, 7, 900).await.unwrap().unwrap();
+    payouts::release_from_pending(&pool, &p.id, "QUEUED", "GWIN").await.unwrap();
+    payouts::mark_submitted(&pool, &p.id, "stalehash").await.unwrap();
+    payouts::mark_failed(&pool, &p.id, "transaction failed on chain", false).await.unwrap();
+    e.chain.set_status(4, BountyStatus::Refunded);
+
+    let r = call(&e.app, Method::POST, &format!("/admin/payouts/{}/reconcile", p.id), &admin.hdrs(true), None).await;
+    assert_eq!(r.status, StatusCode::OK);
+    assert_eq!(r.body["outcome"], "reported");
+    assert_eq!(r.body["chainStatus"], "REFUNDED");
+
+    let row = payouts::get(&pool, &p.id).await.unwrap().unwrap();
+    assert_eq!((row.status.as_str(), row.tx_hash.as_deref()), ("FAILED", Some("stalehash")), "unchanged");
+}
+
+/// #104: a FAILED payout without a tx hash must be sent to /retry instead; /reconcile refuses.
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn reconcile_refuses_a_failed_payout_with_no_tx_hash(pool: PgPool) {
+    let e = env(pool.clone(), true, vec![]);
+    fund(&e, 4, 3).await;
+    let admin = signed_in(&e, 1, "arb", None, true).await;
+    let p = payouts::create_pending(&pool, 4, 7, 900).await.unwrap().unwrap();
+    payouts::mark_failed(&pool, &p.id, "pre-submit failure", false).await.unwrap();
+    let r = call(&e.app, Method::POST, &format!("/admin/payouts/{}/reconcile", p.id), &admin.hdrs(true), None).await;
+    assert_eq!(r.status, StatusCode::CONFLICT);
+    assert_eq!(r.body["error"]["code"], "no_tx_hash");
+}
+
+/// #104: a non-FAILED payout is a wrong_state 409; only failed-with-hash is reconcilable.
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn reconcile_refuses_a_non_failed_payout(pool: PgPool) {
+    let e = env(pool.clone(), true, vec![]);
+    fund(&e, 4, 3).await;
+    let admin = signed_in(&e, 1, "arb", None, true).await;
+    let p = payouts::create_pending(&pool, 4, 7, 900).await.unwrap().unwrap();
+    // PENDING_WALLET is the initial state.
+    let r = call(&e.app, Method::POST, &format!("/admin/payouts/{}/reconcile", p.id), &admin.hdrs(true), None).await;
+    assert_eq!(r.status, StatusCode::CONFLICT);
+    assert_eq!(r.body["error"]["code"], "wrong_state");
 }
 
 #[sqlx::test(migrator = "MIGRATOR")]

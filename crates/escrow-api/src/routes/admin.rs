@@ -251,6 +251,81 @@ pub async fn retry_payout(
     Ok(Json(json!({ "ok": true })))
 }
 
+/// #104: reconcile a FAILED payout that already carries a tx hash. Reads the bounty from the
+/// chain (authoritative) and settles the payout accordingly: confirmed if the release landed
+/// to our winner, requeued if the bounty is still open (the tx expired), otherwise reports
+/// what the chain shows so the operator can route to the arbiter or refund path.
+#[derive(Serialize, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ReconcileResult {
+    /// `confirmed`, `requeued`, or `reported`.
+    pub outcome: &'static str,
+    /// The bounty's current chain status, verbatim (e.g. "RELEASED", "REFUNDED").
+    pub chain_status: String,
+    /// The on-chain winner recorded on the bounty, if any.
+    pub chain_winner: Option<String>,
+    /// The payout's stored tx hash at the time of the reconcile.
+    pub tx_hash: String,
+}
+
+pub async fn reconcile_payout(
+    State(s): State<AppState>,
+    Extension(ip): Extension<ClientIp>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> ApiResult<Json<ReconcileResult>> {
+    let a = admin(&s, &headers, &ip, true).await?;
+    let p = if id_ok(&id) { payouts::get(&s.db.pool, &id).await? } else { None }.ok_or_else(|| ApiError::not_found("payout"))?;
+    if p.status != "FAILED" {
+        return Err(ApiError::conflict("wrong_state", &format!("payout is {}", p.status)));
+    }
+    // reconcile is the counterpart to /retry: /retry refuses rows that have a hash and sends
+    // them here; this route refuses rows that do not have one and sends them back to /retry.
+    let tx_hash = p
+        .tx_hash
+        .clone()
+        .ok_or_else(|| ApiError::conflict("no_tx_hash", "payout has no transaction; use /retry to re-queue it"))?;
+    let bounty_u64 = u64::try_from(p.bounty_id).map_err(|_| ApiError::conflict("bad_bounty_id", "bounty id out of range"))?;
+    let chain = s.chain.get_bounty(bounty_u64).await?;
+    let chain_status = chain.status.to_string();
+
+    let outcome: &'static str = if chain.status == BountyStatus::Released
+        && chain.winner.as_deref() == p.winner_address.as_deref()
+    {
+        // The release did land; just missed the confirmation. Record it and be done.
+        payouts::mark_confirmed(&s.db.pool, &p.id, Some(&tx_hash)).await?;
+        "confirmed"
+    } else if chain.status == BountyStatus::Open {
+        // The tx never landed and the bounty is still ours to release. Clear the hash and
+        // re-queue so the relayer submits fresh. The guarded UPDATE serializes concurrent
+        // reconcile attempts to exactly one winner.
+        if !payouts::requeue_failed_with_hash(&s.db.pool, &p.id).await? {
+            return Err(ApiError::conflict("wrong_state", "payout changed while reconciling"));
+        }
+        "requeued"
+    } else {
+        // Refunded / Disputed / Resolved: nothing to do here; the operator must route it
+        // through the arbiter or refund path. The payout stays FAILED and we only report.
+        "reported"
+    };
+
+    audit_log(
+        &s,
+        &a,
+        "payout.reconcile",
+        format!("payout:{}", p.id),
+        json!({
+            "outcome": outcome,
+            "chainStatus": chain_status,
+            "chainWinner": chain.winner.clone(),
+            "txHash": tx_hash,
+        }),
+    )
+    .await?;
+
+    Ok(Json(ReconcileResult { outcome, chain_status, chain_winner: chain.winner, tx_hash }))
+}
+
 #[derive(Deserialize)]
 pub struct AiReviewsBody {
     enabled: bool,

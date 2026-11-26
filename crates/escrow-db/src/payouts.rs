@@ -146,6 +146,20 @@ pub async fn retry_failed<'e>(ex: impl PgExecutor<'e>, id: &str) -> Result<bool,
         .map(|r| r.rows_affected() == 1)
 }
 
+/// #104: admin reconcile path - a FAILED payout whose on-chain transaction is gone and whose
+/// bounty is still OPEN. Clears the hash and re-queues so the relayer submits a fresh one.
+/// Guarded to a FAILED row with a hash; returns whether the row was re-queued.
+pub async fn requeue_failed_with_hash<'e>(ex: impl PgExecutor<'e>, id: &str) -> Result<bool, sqlx::Error> {
+    sqlx::query(
+        "UPDATE payouts SET status = 'QUEUED', tx_hash = NULL, attempts = 0, last_error = NULL, updated_at = now()
+         WHERE id = $1 AND status = 'FAILED' AND tx_hash IS NOT NULL",
+    )
+    .bind(id)
+    .execute(ex)
+    .await
+    .map(|r| r.rows_affected() == 1)
+}
+
 /// The indexer saw the release on chain: whatever state we were in, the payout is done.
 pub async fn confirm_from_chain<'e>(ex: impl PgExecutor<'e>, bounty_id: i64, tx_hash: &str, winner: &str) -> Result<u64, sqlx::Error> {
     sqlx::query(
@@ -158,6 +172,36 @@ pub async fn confirm_from_chain<'e>(ex: impl PgExecutor<'e>, bounty_id: i64, tx_
     .execute(ex)
     .await
     .map(|r| r.rows_affected())
+}
+
+/// #105: audit-friendly variant of `confirm_from_chain`. Returns the id and prior status of
+/// every payout the UPDATE touched, so the indexer can write a `payout.confirmed` audit entry
+/// inside the same transaction. The CTE snapshots the pre-UPDATE status via a data-modifying
+/// subquery - in Postgres a CTE's SELECT shares its snapshot with the enclosing statement,
+/// so `prior.status` is the value before the write.
+pub async fn confirm_from_chain_returning<'e>(
+    ex: impl PgExecutor<'e>,
+    bounty_id: i64,
+    tx_hash: &str,
+    winner: &str,
+) -> Result<Vec<(String, String)>, sqlx::Error> {
+    sqlx::query_as(
+        "WITH prior AS (
+             SELECT id, status FROM payouts
+             WHERE bounty_id = $1 AND status IN ('QUEUED','SUBMITTED','AWAITING_MAINTAINER')
+         ),
+         upd AS (
+             UPDATE payouts SET status = 'CONFIRMED', tx_hash = $2, winner_address = $3, updated_at = now()
+             WHERE bounty_id = $1 AND status IN ('QUEUED','SUBMITTED','AWAITING_MAINTAINER')
+             RETURNING id
+         )
+         SELECT p.id, p.status FROM prior p JOIN upd u ON u.id = p.id",
+    )
+    .bind(bounty_id)
+    .bind(tx_hash)
+    .bind(winner)
+    .fetch_all(ex)
+    .await
 }
 
 /// Payouts the relayer should work on, oldest first.

@@ -237,6 +237,41 @@ async fn refund_reminders_go_out_once_each_at_the_right_time(pool: PgPool) {
     assert!(send(open + Duration::days(9)).await.unwrap().is_empty());
 }
 
+/// #103: when the maintainer's GitHub login is known, the reminder is prefixed with an
+/// @mention so GitHub notifies them even if they are not watching the issue.
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn refund_reminder_mentions_the_maintainer_when_login_is_known(pool: PgPool) {
+    let w = world(pool.clone()).await;
+    open_bounty(&w, 4, 3).await;
+    // The seed defaults `maintainer_github_id = Some(500)`; this ensures the login can resolve.
+    escrow_testkit::seed::user(&w.db, 500, "octocat", None).await;
+    let commenter = GithubCommenter { db: w.db.clone(), gh: w.gh.clone() };
+    let deadline = bounties::get(&pool, 4).await.unwrap().unwrap().deadline;
+    let at = deadline + Duration::hours(72) + Duration::minutes(1); // "open" kind
+    let sent = send_refund_reminders(&w.db, &commenter, Duration::hours(72), "https://app.example", at).await.unwrap();
+    assert_eq!(sent.sent, ["open:4"]);
+    let body = &w.gh.bodies()[0];
+    assert!(body.starts_with("@octocat "), "body must start with the mention: {body}");
+    assert!(body.contains("is now open"));
+}
+
+/// #103: when the maintainer login cannot be resolved (never-linked wallet, deleted account)
+/// the reminder text is unchanged - no stray leading "@" or empty mention.
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn refund_reminder_has_no_mention_when_maintainer_login_is_unknown(pool: PgPool) {
+    let w = world(pool.clone()).await;
+    open_bounty(&w, 4, 3).await;
+    // No `users` row for github_id 500 - the join returns None and the mention stays empty.
+    let commenter = GithubCommenter { db: w.db.clone(), gh: w.gh.clone() };
+    let deadline = bounties::get(&pool, 4).await.unwrap().unwrap().deadline;
+    let at = deadline + Duration::hours(72) + Duration::minutes(1);
+    let sent = send_refund_reminders(&w.db, &commenter, Duration::hours(72), "https://app.example", at).await.unwrap();
+    assert_eq!(sent.sent, ["open:4"]);
+    let body = &w.gh.bodies()[0];
+    assert!(body.starts_with("The refund window"), "no @mention prefix when unknown: {body}");
+    assert!(!body.contains('@'), "no stray @ anywhere: {body}");
+}
+
 struct FlakyCommenter(Mutex<u32>);
 #[async_trait]
 impl IssueCommenter for FlakyCommenter {
