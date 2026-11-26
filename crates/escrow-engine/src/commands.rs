@@ -42,10 +42,14 @@ pub struct CommandDeps {
     pub now: fn() -> DateTime<Utc>,
 }
 
+/// Longest dispute reason kept, in characters; anything beyond it is dropped (and the user is told).
+pub const MAX_DISPUTE_REASON_CHARS: usize = 2000;
+
 const WRITERS: [&str; 3] = ["admin", "maintain", "write"];
 const HELP: &str = "**SkillEscrow commands**\n\
 - `/bounty <amount> [USDC|XLM] [<days>d]` fund this issue, e.g. `/bounty 50 USDC 14d` (needs write access)\n\
 - `/bounty dispute <reason>` flag a problem on a bountied issue\n\
+- `/bounty review` request an AI review of a PR (PRs only, needs write access)\n\
 - `/bounty help`";
 
 /// What happened, as a short label for logs and tests. User mistakes get a friendly reply and are not errors;
@@ -108,8 +112,28 @@ pub async fn handle_issue_comment(d: &CommandDeps, ev: &IssueCommentEvent) -> Re
                 reply("Only the maintainer or an author of a linked PR can open a dispute.".into()).await?;
                 return Ok("denied".into());
             }
-            let reason: String = reason.chars().take(2000).collect();
-            let dsp = disputes::create(&d.db.pool, b.id, uid, &reason).await?;
+            if !b.status().is_active() {
+                reply(format!(
+                    "This bounty is already {}, so a dispute can no longer change anything on chain.",
+                    b.status().as_str().to_lowercase()
+                ))
+                .await?;
+                return Ok("rejected:inactive".into());
+            }
+            let truncated = reason.chars().count() > MAX_DISPUTE_REASON_CHARS;
+            let reason: String = reason.chars().take(MAX_DISPUTE_REASON_CHARS).collect();
+            let dsp = match disputes::create_if_none_open(&d.db.pool, b.id, uid, &reason).await? {
+                disputes::NewDispute::Created(dsp) => dsp,
+                disputes::NewDispute::AlreadyOpen(existing) => {
+                    reply(format!(
+                        "A dispute is already open on this bounty (requested {}, status: {}). A human will review that one, so there is no need to file another.",
+                        existing.created_at.format("%Y-%m-%d"),
+                        existing.status.replace('_', " ")
+                    ))
+                    .await?;
+                    return Ok("rejected:dispute-open".into());
+                }
+            };
             audit::log(
                 &d.db.pool,
                 &format!("github:{uid}"),
@@ -118,7 +142,13 @@ pub async fn handle_issue_comment(d: &CommandDeps, ev: &IssueCommentEvent) -> Re
                 &serde_json::json!({ "dispute": dsp.id }),
             )
             .await?;
-            reply("Dispute recorded. A human will review this within 48 hours.".into()).await?;
+            let mut text = format!("Dispute recorded. A human will review this within {} hours.", escrow_core::DISPUTE_RESPONSE_HOURS);
+            if truncated {
+                text.push_str(&format!(
+                    "\n\nYour reason was longer than {MAX_DISPUTE_REASON_CHARS} characters, so it was shortened to the first {MAX_DISPUTE_REASON_CHARS}. Post any further detail in a follow-up comment."
+                ));
+            }
+            reply(text).await?;
             Ok("dispute-requested".into())
         }
         Command::Fund { amount, token, days } => {

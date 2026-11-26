@@ -2,7 +2,7 @@
 
 use crate::models::{AiReview, Bounty, PullRequest};
 use chrono::{DateTime, Utc};
-use sqlx::PgExecutor;
+use sqlx::{FromRow, PgExecutor};
 
 const COLS: &str = "id, number, author_github_id, author_login, head_sha, state, merged_at, diff_hash";
 
@@ -66,6 +66,25 @@ pub async fn for_bounty<'e>(ex: impl PgExecutor<'e>, bounty_id: i64) -> Result<V
     .bind(bounty_id)
     .fetch_all(ex)
     .await
+}
+
+/// Batch counterpart of `for_bounty`: each PR is paired with the bounty it is linked to.
+pub async fn for_bounties<'e>(ex: impl PgExecutor<'e>, bounty_ids: &[i64]) -> Result<Vec<(i64, PullRequest)>, sqlx::Error> {
+    #[derive(FromRow)]
+    struct Row {
+        #[sqlx(flatten)]
+        pr: PullRequest,
+        bounty_id: i64,
+    }
+    sqlx::query_as::<_, Row>(
+        "SELECT p.id, p.number, p.author_github_id, p.author_login, p.head_sha, p.state, p.merged_at, p.diff_hash, l.bounty_id
+         FROM pull_requests p JOIN pull_request_bounties l ON l.pr_id = p.id
+         WHERE l.bounty_id = ANY($1) ORDER BY l.bounty_id, p.id",
+    )
+    .bind(bounty_ids)
+    .fetch_all(ex)
+    .await
+    .map(|rows| rows.into_iter().map(|r| (r.bounty_id, r.pr)).collect())
 }
 
 /// Bounties a PR closes that are still live, oldest first.

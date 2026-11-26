@@ -170,7 +170,16 @@ impl GithubApi for FakeGithub {
 
     async fn set_bounty_label(&self, _i: i64, repo: &str, issue: i32, label: &str) -> Result<(), GithubError> {
         self.enter("set_bounty_label").await?;
-        self.with(|s| s.labels.push((repo.into(), issue, label.into())));
+        self.with(|s| {
+            s.labels.retain(|(r, i, l)| !(r == repo && *i == issue && l.starts_with("bounty:")));
+            s.labels.push((repo.into(), issue, label.into()));
+        });
+        Ok(())
+    }
+
+    async fn remove_bounty_label(&self, _i: i64, repo: &str, issue: i32) -> Result<(), GithubError> {
+        self.enter("remove_bounty_label").await?;
+        self.with(|s| s.labels.retain(|(r, i, l)| !(r == repo && *i == issue && l.starts_with("bounty:"))));
         Ok(())
     }
 

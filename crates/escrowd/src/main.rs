@@ -98,6 +98,11 @@ async fn main() -> Result<()> {
     // fail fast with every problem listed, before touching the network
     let cfg = Config::from_env().map_err(|e| anyhow::anyhow!("{e}"))?;
 
+    // Log configuration warnings at startup
+    for warning in &cfg.warnings {
+        tracing::warn!("configuration: {}", warning);
+    }
+
     match cli.cmd {
         Cmd::Healthcheck => unreachable!("handled before the configuration is loaded"),
         Cmd::Doctor { json } => doctor::run(cfg, json).await,

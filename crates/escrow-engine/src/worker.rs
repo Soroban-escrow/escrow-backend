@@ -11,13 +11,16 @@ use crate::{
     ops::{AlertInputs, AlertSender, collect_alerts},
     ports::ReviewRunner,
     pulls::recover_missed_merges,
-    sync::{GithubCommenter, SyncDeps, announce_payout, refresh_bounty_card, send_refund_reminders},
+    sync::{
+        GithubCommenter, SyncDeps, announce_payout, dispute_comment_body, post_dispute_comment, refresh_bounty_card, send_refund_reminders,
+    },
 };
 use chrono::{Duration as ChronoDuration, Utc};
 use escrow_chain::{ChainReader, ReleaseSigner};
 use escrow_db::{Db, Job, jobs, sessions, webhooks};
 use std::{sync::Arc, time::Duration};
 use tokio_util::sync::CancellationToken;
+use tracing::Instrument;
 
 const LEASE_SECS: i64 = 180;
 /// How often open linked PRs are re-checked on GitHub for a merge whose webhook was missed.
@@ -71,6 +74,13 @@ pub async fn handle_job(w: &WorkerDeps, job: &Job) -> Result<String, EngineError
         }
         kinds::CARD_REFRESH => Ok(format!("card {:?}", refresh_bounty_card(&w.sync, payload_i64(job, "bountyId")?).await?)),
         kinds::PAYOUT_ANNOUNCE => Ok(format!("announced={}", announce_payout(&w.sync, payload_i64(job, "bountyId")?).await?)),
+        kinds::DISPUTE_COMMENT => {
+            let kind = job.payload.get("kind").and_then(|v| v.as_str()).unwrap_or_default();
+            let note = job.payload.get("note").and_then(|v| v.as_str());
+            let key = job.payload.get("key").and_then(|v| v.as_str()).unwrap_or_default();
+            let body = dispute_comment_body(kind, note);
+            Ok(format!("dispute_comment={}", post_dispute_comment(&w.sync, payload_i64(job, "bountyId")?, &body, key).await?))
+        }
         kinds::REVIEW => {
             let Some(runner) = &w.reviews else {
                 return Err(EngineError::Other("AI review is not configured".into()));
@@ -88,7 +98,7 @@ pub async fn handle_job(w: &WorkerDeps, job: &Job) -> Result<String, EngineError
 
 /// Claims and runs jobs until stopped. `concurrency` workers share the queue.
 pub async fn run_queue(w: Arc<WorkerDeps>, stop: CancellationToken, concurrency: usize, poll: Duration) {
-    let mut kinds_to_run: Vec<&str> = vec![kinds::WEBHOOK, kinds::CARD_REFRESH, kinds::PAYOUT_ANNOUNCE];
+    let mut kinds_to_run: Vec<&str> = vec![kinds::WEBHOOK, kinds::CARD_REFRESH, kinds::PAYOUT_ANNOUNCE, kinds::DISPUTE_COMMENT];
     if w.reviews.is_some() {
         kinds_to_run.push(kinds::REVIEW);
     }
@@ -122,6 +132,15 @@ pub async fn run_queue(w: Arc<WorkerDeps>, stop: CancellationToken, concurrency:
 }
 
 async fn run_one(w: &WorkerDeps, job: &Job, worker: usize) {
+    // For webhook jobs the GitHub delivery id is the request's correlation id: log it the same way the
+    // HTTP layer logs x-request-id, so one search finds the request, its job and every retry.
+    let span = tracing::info_span!("job", worker, job = job.id, kind = %job.kind, request_id = tracing::field::Empty);
+    if job.kind == kinds::WEBHOOK
+        && let Some(id) = job.payload.get("id").and_then(|v| v.as_str())
+    {
+        span.record("request_id", id);
+    }
+    async move {
     let pool = &w.db.pool;
     match handle_job(w, job).await {
         Ok(label) => {
@@ -148,6 +167,9 @@ async fn run_one(w: &WorkerDeps, job: &Job, worker: usize) {
             let _ = jobs::bury(pool, job.id, &e.to_string()).await;
         }
     }
+    }
+    .instrument(span)
+    .await
 }
 
 /// Hourly reminders, per-minute alerts, missed-merge recovery every ten minutes, daily housekeeping.
@@ -181,7 +203,12 @@ pub async fn run_periodic(w: Arc<WorkerDeps>, stop: CancellationToken) {
                 }
             }
             _ = alerts.tick() => {
-                let balance = match &w.relayer { Some(r) => r.balance_xlm().await.ok(), None => None };
+                // #108: the failed-read case is its own alert, so pass the Result through rather
+                // than silently collapsing the error to None.
+                let balance = match &w.relayer {
+                    Some(r) => Some(r.balance_xlm().await.map_err(|e| e.to_string())),
+                    None => None,
+                };
                 let tip = w.chain.latest_ledger().await.ok();
                 match collect_alerts(&w.db, &AlertInputs { relayer_balance_xlm: balance, min_relayer_xlm: w.min_relayer_xlm, latest_ledger: tip, now: Utc::now() }).await {
                     Ok(msgs) => { w.alerts.send(&msgs, std::time::Instant::now()).await; }

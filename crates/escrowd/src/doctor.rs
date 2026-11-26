@@ -108,7 +108,13 @@ fn check_metrics(r: &mut Report, token: Option<&str>) {
 pub async fn run(cfg: Config, as_json: bool) -> Result<()> {
     let mut r = Report::new();
     r.ok("configuration", format!("valid ({:?}, contract {}…)", cfg.network, &cfg.contract_id[..8]));
+    r.ok("log level", cfg.log_level.to_string());
     check_metrics(&mut r, cfg.metrics_token.as_deref());
+
+    // Show configuration warnings
+    for warning in &cfg.warnings {
+        r.add(Status::Warn, "configuration", warning.clone(), None);
+    }
 
     match runtime::connect(cfg.clone(), false).await {
         Err(e) => r.add(Status::Fail, "database", format!("{e:#}"), Some("Check DATABASE_URL and that Postgres is running.")),

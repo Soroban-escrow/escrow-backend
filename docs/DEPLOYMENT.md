@@ -67,6 +67,16 @@ Caddy obtains the TLS certificate automatically on first request to `https://$AP
 
 **6. Tell GitHub where the API is.** In the GitHub App's settings: webhook URL `https://$API_DOMAIN/github/webhooks`, the same webhook secret, and the callback URL `https://$API_DOMAIN/auth/callback`. Use GitHub's "Recent deliveries" page to redeliver and watch the worker pick them up.
 
+> **Which webhook events to subscribe to.** The backend only handles the events listed below. Subscribing to more is harmless — the receiver drops them with a 202 before writing to the queue (#127) — but subscribing to fewer means commands and bounty cards stop working. Pick exactly these:
+>
+> * **Installation** — the App's install/uninstall and `installation_repositories` events.
+> * **Repository** — renames and transfers of repos the App is installed on.
+> * **Issue comments** — the `/bounty …` commands live here.
+> * **Pull requests** — opened/closed/merged events link PRs to bounties.
+> * **Issues** — edits, closes/reopens, transfers and deletions refresh or alert on bounty cards.
+>
+> (Internally this is the `HANDLED_WEBHOOK_EVENTS` list in `escrow-engine::dispatch`. The receiver cross-checks it on every delivery, so adding a handler also updates the queue filter.)
+
 **7. Deploy the web app to Vercel** (from the `escrow-app` repo, root `apps/web`). Set `API_INTERNAL_URL=https://$API_DOMAIN` **at build time** (Next bakes its rewrites at build), plus the `NEXT_PUBLIC_*` variables from that repo's README.
 
 **8. Keep it healthy for free.** Point a free uptime monitor (UptimeRobot, Better Stack) at `https://$API_DOMAIN/health`: it returns `503` when the database or RPC is down or the indexer is behind. Set `ALERT_WEBHOOK_URL` to a Slack/Discord webhook for the worker's own alerts. Schedule database backups (see the runbook).

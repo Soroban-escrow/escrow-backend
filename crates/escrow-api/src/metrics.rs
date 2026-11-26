@@ -14,6 +14,9 @@ pub struct Metrics {
     pub webhooks_accepted: AtomicU64,
     pub webhooks_duplicate: AtomicU64,
     pub webhooks_rejected: AtomicU64,
+    /// #127 — Deliveries dropped because `dispatch_webhook` has no handler for
+    /// the event. These get a 202 and are never written to the queue.
+    pub webhooks_ignored: AtomicU64,
     pub logins: AtomicU64,
     pub wallets_linked: AtomicU64,
 }
@@ -34,6 +37,11 @@ impl Metrics {
         counter("skillescrow_webhooks_accepted_total", "GitHub webhooks accepted and queued", self.webhooks_accepted.load(Relaxed));
         counter("skillescrow_webhooks_duplicate_total", "GitHub webhook redeliveries ignored", self.webhooks_duplicate.load(Relaxed));
         counter("skillescrow_webhooks_rejected_total", "Webhooks with a bad signature or body", self.webhooks_rejected.load(Relaxed));
+        counter(
+            "skillescrow_webhooks_ignored_total",
+            "GitHub webhooks for events this backend has no handler for",
+            self.webhooks_ignored.load(Relaxed),
+        );
         counter("skillescrow_logins_total", "Completed GitHub sign-ins", self.logins.load(Relaxed));
         counter("skillescrow_wallets_linked_total", "Wallets linked", self.wallets_linked.load(Relaxed));
 

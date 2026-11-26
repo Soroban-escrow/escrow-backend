@@ -25,7 +25,16 @@ pub struct Relayer {
     chain: SorobanChain,
     signer: Signer,
     channels: Option<Arc<ChannelPool>>,
+    /// #113: how long `wait_for_tx` polls for a submitted transaction to resolve, and the
+    /// window a restore waits before giving up. Defaults to 60 s; tune via
+    /// `RELAYER_CONFIRM_WAIT_SECS` (bounded to the submit validity window).
+    confirm_wait: Duration,
 }
+
+/// Same 60 s wait the relayer used before #113 became configurable. Exposed so adjacent
+/// call sites (tests, admin tools, future signers) can match the production default
+/// without re-declaring the constant.
+pub const DEFAULT_RELAYER_CONFIRM_WAIT: Duration = Duration::from_secs(60);
 
 /// A signed `release` transaction, ready to send. Nothing has been sent yet.
 #[derive(Debug, Clone)]
@@ -36,7 +45,7 @@ pub struct PreparedRelease {
 
 impl Relayer {
     pub fn new(chain: SorobanChain, secret: &str) -> Result<Self, ChainError> {
-        Ok(Self { chain, signer: Signer::from_secret(secret)?, channels: None })
+        Ok(Self { chain, signer: Signer::from_secret(secret)?, channels: None, confirm_wait: DEFAULT_RELAYER_CONFIRM_WAIT })
     }
 
     /// Adds channel accounts (`RELAYER_CHANNEL_SECRETS`). An empty list keeps the relayer as its own source.
@@ -45,6 +54,13 @@ impl Relayer {
             self.channels = Some(Arc::new(ChannelPool::new(channels::signers_from_secrets(secrets)?)?));
         }
         Ok(self)
+    }
+
+    /// #113: overrides the confirmation wait. Returns `self` so this composes with
+    /// `with_channel_secrets` in the builder chain the runtime uses.
+    pub fn with_confirm_wait(mut self, wait: Duration) -> Self {
+        self.confirm_wait = wait;
+        self
     }
 
     /// Builds, simulates (so a contract rejection surfaces before anything is signed), assembles and signs
@@ -103,7 +119,7 @@ impl Relayer {
         let (env, hash) = tx::sign(t, self.chain.network_id(), &self.signer)?;
         self.chain.send(&tx::to_b64(&env)?).await?;
         tracing::info!(tx = %hex::encode(hash), "restoring archived contract state");
-        match self.chain.wait_for_tx(&hex::encode(hash), Duration::from_secs(60)).await? {
+        match self.chain.wait_for_tx(&hex::encode(hash), self.confirm_wait).await? {
             TxOutcome::Success => Ok(()),
             _ => Err(ChainError::Rejected("restoring archived state did not succeed".into())),
         }
@@ -137,7 +153,7 @@ impl ReleaseSigner for Relayer {
     }
 
     async fn wait_for_tx(&self, hash: &str) -> Result<TxOutcome, ChainError> {
-        self.chain.wait_for_tx(hash, Duration::from_secs(60)).await
+        self.chain.wait_for_tx(hash, self.confirm_wait).await
     }
 
     async fn balance_xlm(&self) -> Result<f64, ChainError> {
@@ -153,4 +169,51 @@ impl ReleaseSigner for Relayer {
 /// Exposed for diagnostics (`escrowd doctor`): the relayer's public address from its secret.
 pub fn address_of_secret(secret: &str) -> Result<String, ChainError> {
     Ok(Signer::from_secret(secret)?.address())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::client::ChainSettings;
+
+    // StrKey ed25519 seed from a 32-byte repeated value - same pattern as the rpc_fake tests
+    // use, which keeps unit tests free of any real key material.
+    fn test_secret(seed: u8) -> String {
+        stellar_strkey::Unredacted(stellar_strkey::ed25519::PrivateKey([seed; 32])).to_string()
+    }
+
+    fn chain() -> SorobanChain {
+        SorobanChain::new(&ChainSettings::new(
+            "http://127.0.0.1:1/unused",
+            "Test SDF Network ; September 2015",
+            "CCEKBPYCWKNTXIQLXJHVAF7RYGUZZ6MITA7VVJBOK5BHXUO44ELZ4F4V",
+        ))
+        .expect("ChainSettings constructs")
+    }
+
+    #[test]
+    fn confirm_wait_defaults_to_sixty_seconds_and_is_overridable() {
+        let secret = test_secret(1);
+        let r = Relayer::new(chain(), &secret).expect("relayer builds");
+        assert_eq!(r.confirm_wait, DEFAULT_RELAYER_CONFIRM_WAIT);
+        assert_eq!(r.confirm_wait, Duration::from_secs(60));
+
+        // #113: tests prefer a short window so a failing network does not pin the thread for a minute.
+        let short = Relayer::new(chain(), &secret).unwrap().with_confirm_wait(Duration::from_millis(50));
+        assert_eq!(short.confirm_wait, Duration::from_millis(50));
+    }
+
+    #[test]
+    fn with_confirm_wait_composes_with_channel_secrets() {
+        // Builder order stays flexible: setting the wait does not clobber channels, and
+        // vice versa. The runtime relies on this to apply both from Config in one chain.
+        let secret = test_secret(2);
+        let r = Relayer::new(chain(), &secret)
+            .unwrap()
+            .with_channel_secrets(&[])
+            .unwrap()
+            .with_confirm_wait(Duration::from_millis(10));
+        assert_eq!(r.confirm_wait, Duration::from_millis(10));
+        assert!(r.channels.is_none());
+    }
 }

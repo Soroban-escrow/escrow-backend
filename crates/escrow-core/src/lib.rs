@@ -22,3 +22,9 @@ pub use status::{BountyStatus, DisputeStatus, PayoutStatus};
 
 /// Sent by every outbound HTTP client, so a provider can tell which release made a request.
 pub const USER_AGENT: &str = concat!("skillescrow-backend/", env!("CARGO_PKG_VERSION"));
+
+/// Dispute response window SLA in hours. Promised to disputants, used for overdue flagging and alerts.
+/// The alert fires at 36h (before the 48h SLA) so operators have warning before the deadline.
+pub const DISPUTE_RESPONSE_HOURS: i64 = 48;
+/// Hours before the SLA when the overdue alert/flag fires, giving operators advance warning.
+pub const DISPUTE_ALERT_HOURS: i64 = 36;

@@ -3,6 +3,7 @@
 use crate::indexer::CURSOR_ID;
 use chrono::{DateTime, Duration, Utc};
 use escrow_chain::ChainReader;
+use escrow_core::PayoutStatus;
 use escrow_db::{Db, audit, disputes, jobs, payouts, webhooks};
 use serde::Serialize;
 use std::{collections::HashMap, sync::Mutex, time::Instant};
@@ -39,7 +40,10 @@ pub async fn health_report(db: &Db, chain: &dyn ChainReader, check_indexer_lag: 
 }
 
 pub struct AlertInputs {
-    pub relayer_balance_xlm: Option<f64>,
+    /// `None` when no relayer is configured; otherwise `Some(Ok(balance))` or `Some(Err(reason))`.
+    /// A failed read is surfaced as its own alert, so the window where the relayer has drained but
+    /// the balance call is also failing (account missing, RPC down) still pages the operator.
+    pub relayer_balance_xlm: Option<Result<f64, String>>,
     pub min_relayer_xlm: f64,
     pub latest_ledger: Option<u32>,
     pub now: DateTime<Utc>,
@@ -61,12 +65,18 @@ impl Alert {
 /// The alerts that apply right now.
 pub async fn collect_alerts(db: &Db, a: &AlertInputs) -> Result<Vec<Alert>, sqlx::Error> {
     let mut out = vec![];
-    if let Some(b) = a.relayer_balance_xlm
-        && b < a.min_relayer_xlm
-    {
-        out.push(Alert::new("relayer_balance", format!("Relayer balance low: {b:.2} XLM (alert below {})", a.min_relayer_xlm)));
+    match &a.relayer_balance_xlm {
+        Some(Ok(b)) if *b < a.min_relayer_xlm => {
+            out.push(Alert::new("relayer_balance", format!("Relayer balance low: {b:.2} XLM (alert below {})", a.min_relayer_xlm)));
+        }
+        Some(Err(reason)) => {
+            // Keyed separately from `relayer_balance` so the cooldown on one does not swallow the
+            // other, and so an operator can tell "balance low" from "balance unreadable" in the log.
+            out.push(Alert::new("relayer_balance_read_failed", format!("Relayer balance could not be read: {reason}")));
+        }
+        _ => {}
     }
-    let failed = payouts::count_by_status(&db.pool, &["FAILED"]).await?;
+    let failed = payouts::count_by_status(&db.pool, &[PayoutStatus::Failed]).await?;
     if failed > 0 {
         out.push(Alert::new("payouts_failed", format!("{failed} payout(s) FAILED and need attention")));
     }
@@ -76,9 +86,9 @@ pub async fn collect_alerts(db: &Db, a: &AlertInputs) -> Result<Vec<Alert>, sqlx
             out.push(Alert::new("indexer_lag", format!("Indexer is {lag} ledgers behind")));
         }
     }
-    let stale = disputes::count_open_older_than(&db.pool, a.now - Duration::hours(36)).await?;
+    let stale = disputes::count_open_older_than(&db.pool, a.now - Duration::hours(escrow_core::DISPUTE_ALERT_HOURS)).await?;
     if stale > 0 {
-        out.push(Alert::new("disputes_stale", format!("{stale} dispute(s) older than 36 h")));
+        out.push(Alert::new("disputes_stale", format!("{stale} dispute(s) older than {} h", escrow_core::DISPUTE_ALERT_HOURS)));
     }
     // merged-but-unpaid PRs whose refund window opens within 72 h: the arbiter may need to act
     let risky: Vec<(i64, String)> = sqlx::query_as(

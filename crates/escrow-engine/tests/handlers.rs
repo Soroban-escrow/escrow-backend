@@ -147,7 +147,7 @@ async fn help_and_usage_errors_reply_with_the_command_list(pool: PgPool) {
     assert_eq!(run(&w, "issue_comment", &say("/bounty help", "stranger")).await.unwrap(), "help");
     assert_eq!(run(&w, "issue_comment", &say("/bounty fifty", "stranger")).await.unwrap(), "error");
     let b = w.gh.bodies();
-    assert!(b[0].contains("SkillEscrow commands") && b[1].contains("Invalid amount \"fifty\"") && b[1].contains("SkillEscrow commands"));
+    assert!(b[0].contains("SkillEscrow commands") && b[0].contains("/bounty review") && b[1].contains("Invalid amount \"fifty\"") && b[1].contains("SkillEscrow commands"));
 }
 
 #[sqlx::test(migrator = "MIGRATOR")]
@@ -175,16 +175,86 @@ async fn disputes_come_only_from_the_maintainer_or_a_linked_pr_author(pool: PgPo
     assert_eq!(run(&w, "issue_comment", &stranger).await.unwrap(), "denied");
     let author = comment_event("/bounty dispute  it was reviewed unfairly  ", 900, "dev", "User", 3, "open", false);
     assert_eq!(run(&w, "issue_comment", &author).await.unwrap(), "dispute-requested");
-    assert_eq!(run(&w, "issue_comment", &say("/bounty dispute duplicate PR won", "alice")).await.unwrap(), "dispute-requested");
 
     let open = disputes::list_open(&pool).await.unwrap();
-    assert_eq!(open.len(), 2);
+    assert_eq!(open.len(), 1);
     assert_eq!(
         (open[0].opened_by_github_id, open[0].reason.as_str(), open[0].status.as_str()),
         (900, "it was reviewed unfairly", "requested")
     );
     assert!(audit::exists(&pool, "dispute.requested", "bounty:4").await.unwrap());
-    assert!(w.gh.bodies().last().unwrap().contains("A human will review this within 48 hours"));
+    assert!(w.gh.bodies().last().unwrap().contains(&format!("A human will review this within {} hours", escrow_core::DISPUTE_RESPONSE_HOURS)));
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn a_second_dispute_while_one_is_open_points_at_the_existing_one(pool: PgPool) {
+    let w = world(pool.clone()).await;
+    seed::bounty(&w.db, &seed::B::new(4, 3)).await;
+
+    assert_eq!(run(&w, "issue_comment", &say("/bounty dispute first", "alice")).await.unwrap(), "dispute-requested");
+    assert_eq!(run(&w, "issue_comment", &say("/bounty dispute second", "alice")).await.unwrap(), "rejected:dispute-open");
+    let reply = w.gh.bodies().pop().unwrap();
+    assert!(reply.contains("A dispute is already open on this bounty") && reply.contains("status: requested"), "{reply}");
+
+    let open = disputes::list_open(&pool).await.unwrap();
+    assert_eq!((open.len(), open[0].reason.as_str()), (1, "first"));
+
+    // the same holds once the arbiter has opened it on chain
+    disputes::mark_opened_onchain(&pool, 4).await.unwrap();
+    assert_eq!(run(&w, "issue_comment", &say("/bounty dispute third", "alice")).await.unwrap(), "rejected:dispute-open");
+    assert!(w.gh.bodies().pop().unwrap().contains("status: opened onchain"));
+    assert_eq!(disputes::count_open(&pool).await.unwrap(), 1);
+
+    // after it is resolved, a new dispute is allowed again (the bounty is Disputed/active until the chain says otherwise)
+    disputes::mark_resolved(&pool, 4).await.unwrap();
+    assert_eq!(run(&w, "issue_comment", &say("/bounty dispute fourth", "alice")).await.unwrap(), "dispute-requested");
+    assert_eq!(disputes::count_open(&pool).await.unwrap(), 1);
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn disputes_on_bounties_that_are_no_longer_active_are_refused(pool: PgPool) {
+    let w = world(pool.clone()).await;
+    seed::bounty(&w.db, &seed::B::new(4, 3)).await;
+
+    for status in [BountyStatus::Released, BountyStatus::Refunded, BountyStatus::Resolved] {
+        sqlx::query("UPDATE bounties SET status = $1 WHERE id = 4").bind(status.as_str()).execute(&pool).await.unwrap();
+        assert_eq!(run(&w, "issue_comment", &say("/bounty dispute too late", "alice")).await.unwrap(), "rejected:inactive", "{status}");
+        let reply = w.gh.bodies().pop().unwrap();
+        assert!(reply.contains(&format!("already {}", status.as_str().to_lowercase())), "{reply}");
+        assert_eq!(disputes::count_open(&pool).await.unwrap(), 0, "{status}");
+        assert!(!audit::exists(&pool, "dispute.requested", "bounty:4").await.unwrap(), "{status}");
+    }
+
+    // an already Disputed bounty is still active, so a request is recorded
+    sqlx::query("UPDATE bounties SET status = 'DISPUTED' WHERE id = 4").execute(&pool).await.unwrap();
+    assert_eq!(run(&w, "issue_comment", &say("/bounty dispute still open", "alice")).await.unwrap(), "dispute-requested");
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn a_dispute_reason_over_the_limit_is_shortened_and_the_user_is_told(pool: PgPool) {
+    use escrow_engine::commands::MAX_DISPUTE_REASON_CHARS;
+    let w = world(pool.clone()).await;
+    seed::bounty(&w.db, &seed::B::new(4, 3)).await;
+
+    let long = "é".repeat(2500); // multi-byte, so the cut must be by characters
+    assert_eq!(run(&w, "issue_comment", &say(&format!("/bounty dispute {long}"), "alice")).await.unwrap(), "dispute-requested");
+    let stored = &disputes::list_open(&pool).await.unwrap()[0].reason;
+    assert_eq!(stored.chars().count(), MAX_DISPUTE_REASON_CHARS);
+    let reply = w.gh.bodies().pop().unwrap();
+    assert!(reply.contains("Dispute recorded."), "{reply}");
+    assert!(reply.contains("longer than 2000 characters, so it was shortened to the first 2000"), "{reply}");
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn a_dispute_reason_at_the_limit_is_kept_whole_without_a_notice(pool: PgPool) {
+    use escrow_engine::commands::MAX_DISPUTE_REASON_CHARS;
+    let w = world(pool.clone()).await;
+    seed::bounty(&w.db, &seed::B::new(4, 3)).await;
+
+    let exact = "x".repeat(MAX_DISPUTE_REASON_CHARS);
+    assert_eq!(run(&w, "issue_comment", &say(&format!("/bounty dispute {exact}"), "alice")).await.unwrap(), "dispute-requested");
+    assert_eq!(disputes::list_open(&pool).await.unwrap()[0].reason, exact);
+    assert_eq!(w.gh.bodies().pop().unwrap(), "Dispute recorded. A human will review this within 48 hours.");
 }
 
 #[sqlx::test(migrator = "MIGRATOR")]
@@ -553,6 +623,49 @@ async fn installing_the_app_registers_the_account_and_its_repositories(pool: PgP
     let back = json!({ "action": "unsuspend", "installation": { "id": 77, "account": { "login": "newco", "type": "Organization" } } });
     run(&w, "installation", &back).await.unwrap();
     assert!(escrow_db::github::get_installation(&pool, 77).await.unwrap().unwrap().suspended_at.is_none());
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn renaming_or_transferring_a_repository_rewrites_its_bounties_issue_urls(pool: PgPool) {
+    let w = world(pool.clone()).await;
+    fund_bounty(&w, 4, 3).await;
+    fund_bounty(&w, 5, 9).await;
+    let url = |id| {
+        let pool = pool.clone();
+        async move { bounties::get(&pool, id).await.unwrap().unwrap().issue_url }
+    };
+    assert_eq!(url(4).await, "https://github.com/acme/widgets/issues/3");
+
+    let renamed = json!({ "action": "renamed", "installation": { "id": seed::INSTALLATION },
+        "repository": { "id": seed::REPO_ID, "full_name": "acme/gadgets", "private": false },
+        "changes": { "repository": { "name": { "from": "widgets" } } } });
+    assert_eq!(run(&w, "repository", &renamed).await.unwrap(), "repository.renamed");
+    assert_eq!(github::get_repo(&pool, seed::REPO_ID).await.unwrap().unwrap().full_name, "acme/gadgets");
+    assert_eq!(url(4).await, "https://github.com/acme/gadgets/issues/3");
+    assert_eq!(url(5).await, "https://github.com/acme/gadgets/issues/9");
+
+    // a transfer to an account where the app has another installation moves the repo under it
+    let transferred = json!({ "action": "transferred",
+        "installation": { "id": 88, "account": { "login": "newco", "type": "Organization" } },
+        "repository": { "id": seed::REPO_ID, "full_name": "newco/gadgets", "private": true } });
+    assert_eq!(run(&w, "repository", &transferred).await.unwrap(), "repository.transferred");
+    let repo = github::get_repo(&pool, seed::REPO_ID).await.unwrap().unwrap();
+    assert_eq!((repo.full_name.as_str(), repo.installation_id, repo.is_private), ("newco/gadgets", 88, true));
+    assert_eq!(url(4).await, "https://github.com/newco/gadgets/issues/3");
+
+    // without an installation in the payload, a known repo is still renamed; an unknown one is not created
+    let no_inst = json!({ "action": "renamed", "repository": { "id": seed::REPO_ID, "full_name": "newco/thing" } });
+    run(&w, "repository", &no_inst).await.unwrap();
+    assert_eq!(url(5).await, "https://github.com/newco/thing/issues/9");
+    let unknown = json!({ "action": "renamed", "repository": { "id": 999, "full_name": "x/y" } });
+    run(&w, "repository", &unknown).await.unwrap();
+    assert!(github::get_repo(&pool, 999).await.unwrap().is_none());
+
+    // other actions are ignored; a sync that sees the same name changes nothing
+    let archived = json!({ "action": "archived", "repository": { "id": seed::REPO_ID, "full_name": "someone/else" } });
+    assert_eq!(run(&w, "repository", &archived).await.unwrap(), "ignored");
+    assert_eq!(github::get_repo(&pool, seed::REPO_ID).await.unwrap().unwrap().full_name, "newco/thing");
+    assert_eq!(github::rename_repo(&pool, seed::REPO_ID, "newco/thing").await.unwrap(), 0);
 }
 
 #[sqlx::test(migrator = "MIGRATOR")]

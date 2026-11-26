@@ -11,10 +11,11 @@ use sqlx::PgExecutor;
 pub const WEBHOOK: &str = "webhook";
 pub const CARD_REFRESH: &str = "card.refresh";
 pub const PAYOUT_ANNOUNCE: &str = "payout.announce";
+pub const DISPUTE_COMMENT: &str = "dispute.comment";
 pub const REVIEW: &str = "review";
-pub const ALL_KINDS: [&str; 4] = [WEBHOOK, CARD_REFRESH, PAYOUT_ANNOUNCE, REVIEW];
+pub const ALL_KINDS: [&str; 5] = [WEBHOOK, CARD_REFRESH, PAYOUT_ANNOUNCE, DISPUTE_COMMENT, REVIEW];
 /// Kinds that call GitHub (a webhook's commands reply with comments). Not claimed while the App is not configured.
-pub const GITHUB_KINDS: [&str; 4] = [WEBHOOK, CARD_REFRESH, PAYOUT_ANNOUNCE, REVIEW];
+pub const GITHUB_KINDS: [&str; 5] = [WEBHOOK, CARD_REFRESH, PAYOUT_ANNOUNCE, DISPUTE_COMMENT, REVIEW];
 
 /// Queued jobs that need GitHub. While the App is not configured, these are waiting for it.
 pub async fn count_waiting_for_github<'e>(ex: impl PgExecutor<'e>) -> Result<i64, sqlx::Error> {
@@ -51,6 +52,27 @@ pub async fn enqueue_payout_announcement<'e>(ex: impl PgExecutor<'e>, bounty_id:
     jobs::enqueue(ex, PAYOUT_ANNOUNCE, &json!({ "bountyId": bounty_id }), Utc::now(), 8, Some(&format!("announce:{bounty_id}")))
         .await
         .map(|_| ())
+}
+
+/// A GitHub comment about a dispute. `key` identifies the event/decision, so replaying the same event
+/// cannot enqueue a second comment even if the first job is still waiting.
+pub async fn enqueue_dispute_comment<'e>(
+    ex: impl PgExecutor<'e>,
+    bounty_id: i64,
+    kind: &str,
+    note: Option<&str>,
+    key: &str,
+) -> Result<(), sqlx::Error> {
+    jobs::enqueue(
+        ex,
+        DISPUTE_COMMENT,
+        &json!({ "bountyId": bounty_id, "kind": kind, "note": note, "key": key }),
+        Utc::now(),
+        8,
+        Some(&format!("dispute-comment:{key}")),
+    )
+    .await
+    .map(|_| ())
 }
 
 /// Debounced: a newer push to the same PR moves the waiting review later instead of adding another.

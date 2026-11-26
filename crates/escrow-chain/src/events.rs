@@ -92,7 +92,7 @@ impl RawEvent {
 
 pub fn decode_scval(b64: &str) -> Result<ScVal, ChainError> {
     let bytes = STANDARD.decode(b64).map_err(|e| ChainError::Decode(format!("bad base64: {e}")))?;
-    Ok(ScVal::from_xdr(bytes, Limits::none())?)
+    Ok(ScVal::from_xdr(bytes, Limits { depth: 64, len: 1 << 20 })?)
 }
 
 /// `Ok(None)` for events we do not track; `Err` for a tracked event whose shape is wrong.
@@ -294,5 +294,36 @@ mod tests {
         assert_eq!(cursor_ledger("garbage"), 0);
         // ledger 2_345_678 in the high 32 bits
         assert_eq!(cursor_ledger(&format!("{:019}-0000000002", 2_345_678u64 << 32)), 2_345_678);
+    }
+
+    #[test]
+    fn arbitrary_bytes_and_truncated_xdr_never_panic() {
+        let samples: &[&[u8]] = &[
+            b"",
+            b"\x00",
+            b"\x00\x00\x00\x10\x00\x00\x00\x01",
+            &[0xff; 64],
+            &[0, 0, 0, 16, 0, 0, 0, 1].repeat(128), // deeply nested Vec XDR
+        ];
+        for bytes in samples {
+            let b64 = STANDARD.encode(bytes);
+            let _ = decode_scval(&b64);
+            let raw = RawEvent {
+                id: "0-0".into(),
+                ledger: 0,
+                tx_hash: String::new(),
+                ledger_closed_at: String::new(),
+                topics_b64: vec![b64.clone()],
+                value_b64: b64,
+                in_successful_contract_call: true,
+            };
+            let _ = raw.decode();
+        }
+        assert!(decode_scval("not!valid!base64").is_err());
+
+        for name in ["funded", "released", "refunded", "disputed", "resolved"] {
+            let _ = decode_event(&topics(name, Some(1)), &ScVal::Void);
+            let _ = decode_event(&topics(name, Some(1)), &ScVal::Map(None));
+        }
     }
 }

@@ -3,6 +3,7 @@ mod common;
 use chrono::{Duration, Utc};
 use common::*;
 use escrow_chain::ChainError;
+use escrow_core::PayoutStatus;
 use escrow_db::{MIGRATOR, audit, bounties, disputes, github, intents, jobs, payouts, prs, untracked, users, webhooks};
 use escrow_engine::indexer::{
     CURSOR_ID, FAILURE_ALERT_THRESHOLD, MAX_PAGES, apply_untracked_for_repo, min_untracked_ledger_for_repo, poll_once, run,
@@ -143,7 +144,7 @@ async fn a_release_closes_the_bounty_confirms_the_payout_and_finds_the_winner_by
     poll_once(&w.indexer()).await.unwrap();
     // a relayer payout is mid-flight when the chain confirms it
     let p = payouts::create_pending(&pool, 4, 7, 900).await.unwrap().unwrap();
-    payouts::release_from_pending(&pool, &p.id, "QUEUED", &win).await.unwrap();
+    payouts::release_from_pending(&pool, &p.id, PayoutStatus::Queued, &win).await.unwrap();
     payouts::mark_submitted(&pool, &p.id, "relayerhash").await.unwrap();
 
     let rel = released(4, &win, &addr(9), 105, 2);
@@ -176,12 +177,21 @@ async fn refund_dispute_and_resolution_follow_the_chain(pool: PgPool) {
     assert_eq!(bounties::get(&pool, 4).await.unwrap().unwrap().status, "REFUNDED");
     assert_eq!(bounties::get(&pool, 5).await.unwrap().unwrap().status, "DISPUTED");
     assert_eq!(disputes::list_open(&pool).await.unwrap()[0].status, "opened_onchain");
+    assert_eq!(count(&pool, &jobs_of("dispute.comment")).await, 1, "a dispute event queues one comment");
 
     w.events.push_page(vec![resolved(5, Some(&addr(3)), 120, 1)], &event_id(120, 1), 120);
     poll_once(&w.indexer()).await.unwrap();
     let b = bounties::get(&pool, 5).await.unwrap().unwrap();
     assert_eq!((b.status.as_str(), b.winner_address.as_deref()), ("RESOLVED", Some(addr(3).as_str())));
     assert!(disputes::list_open(&pool).await.unwrap().is_empty());
+    assert_eq!(count(&pool, &jobs_of("dispute.comment")).await, 2, "a resolution queues its own comment");
+
+    // Replaying the same events from an older cursor must not post either comment twice.
+    webhooks::delete_cursor(&pool, CURSOR_ID).await.unwrap();
+    w.events.push_page(vec![disputed(5, &addr(8), 111, 1)], &event_id(111, 1), 111);
+    w.events.push_page(vec![resolved(5, Some(&addr(3)), 120, 1)], &event_id(120, 1), 120);
+    assert_eq!(poll_once(&w.indexer()).await.unwrap().applied, 0);
+    assert_eq!(count(&pool, &jobs_of("dispute.comment")).await, 2);
 }
 
 #[sqlx::test(migrator = "MIGRATOR")]

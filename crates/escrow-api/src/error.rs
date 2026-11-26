@@ -6,13 +6,16 @@ use axum::{
 use escrow_chain::ChainError;
 use serde_json::json;
 
-/// Every error leaves the API as `{ "error": { "code": "...", "message": "..." } }`.
-/// `code` is stable and meant for programs; `message` is for people.
+/// Every error leaves the API as `{ "error": { "code": "...", "message": "...", "request_id": "..." } }`.
+/// `code` is stable and meant for programs; `message` is for people; `request_id` is the id to quote in
+/// a support request. The outer request-id middleware fills in that last field.
 #[derive(Debug)]
 pub struct ApiError {
     pub status: StatusCode,
     pub code: String,
     pub message: String,
+    /// The contract's error variant (`IssueAlreadyFunded`, ...) when the contract rejected the call.
+    pub contract_error: Option<String>,
 }
 
 impl ApiError {
@@ -21,7 +24,15 @@ impl ApiError {
             status: StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
             code: code.into(),
             message: message.into(),
+            contract_error: None,
         }
+    }
+    /// A 422 for a call the contract rejected: stable `contract_error` code, the variant name and a friendly message.
+    pub fn contract_rejected(name: &str) -> Self {
+        let message = escrow_core::contract_errors::message_for_name(name).unwrap_or("The contract rejected this transaction.");
+        let mut e = Self::new(422, "contract_error", message);
+        e.contract_error = Some(name.into());
+        e
     }
     pub fn with_code(mut self, code: &str) -> Self {
         self.code = code.into();
@@ -70,7 +81,11 @@ impl ApiError {
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        (self.status, Json(json!({ "error": { "code": self.code, "message": self.message } }))).into_response()
+        let mut error = json!({ "code": self.code, "message": self.message });
+        if let Some(name) = self.contract_error {
+            error["contractError"] = json!(name);
+        }
+        (self.status, Json(json!({ "error": error }))).into_response()
     }
 }
 
@@ -97,6 +112,14 @@ mod tests {
     fn contract_errors_are_named_for_the_caller() {
         let e = ApiError::from_chain(&ChainError::Simulation("HostError: Error(Contract, #9)".into()));
         assert_eq!((e.status.as_u16(), e.code.as_str()), (422, "contract_IssueAlreadyFunded"));
+    }
+
+    #[test]
+    fn contract_rejections_carry_the_variant_and_a_friendly_message() {
+        let e = ApiError::contract_rejected("DeadlineNotReached");
+        assert_eq!((e.status.as_u16(), e.code.as_str(), e.contract_error.as_deref()), (422, "contract_error", Some("DeadlineNotReached")));
+        assert!(e.message.contains("grace period"));
+        assert_eq!(ApiError::contract_rejected("Mystery").message, "The contract rejected this transaction.");
     }
 
     #[test]

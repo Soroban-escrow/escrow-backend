@@ -5,7 +5,8 @@ The authoritative, machine-readable description is [`openapi.yaml`](openapi.yaml
 ## Conventions
 
 - **JSON everywhere.** 64-bit ids (`id`, `repoId`, `githubId`, …) are **strings**; amounts are **strings** of base units (7 decimals: `"50000000"` is 5 tokens).
-- **Errors** are always `{ "error": { "code": "...", "message": "..." } }`. `code` is stable, `message` is for people. Beyond the generic codes (`bad_request`, `unauthenticated`, `forbidden`, `csrf`, `not_found`, `rate_limited`), anything the contract itself rejects comes back as **`contract_<Name>`**: `contract_IssueAlreadyFunded`, `contract_DeadlineNotReached`, `contract_AmountTooSmall`, and so on (the full list is in `escrow-core::contract_errors`). Network trouble is a `503` (`chain_unavailable`), never blamed on the caller.
+- Every response carries `x-request-id`: a caller-supplied `x-request-id` when it is a short printable token, otherwise a generated UUID. The same value appears in tracing spans and in the JSON error body. Send it when reporting a problem.
+- **Errors** are always `{ "error": { "code": "...", "message": "...", "request_id": "..." } }`. `code` is stable, `message` is for people, `request_id` ties the error to the logs. Beyond the generic codes (`bad_request`, `unauthenticated`, `forbidden`, `csrf`, `not_found`, `rate_limited`), anything the contract itself rejects comes back as **`contract_<Name>`**: `contract_IssueAlreadyFunded`, `contract_DeadlineNotReached`, `contract_AmountTooSmall`, and so on (the full list is in `escrow-core::contract_errors`). Network trouble is a `503` (`chain_unavailable`), never blamed on the caller.
 - **Sessions** are the `HttpOnly` cookie `se_session`. Every state-changing request also needs the CSRF token from `GET /auth/me` in the `X-CSRF-Token` header.
 - **Limits**: 300 requests per minute per address overall (`/health` exempt); 20 state-changing requests per minute per user (30 for admin routes). Over the limit: `429 rate_limited`. Request bodies are capped at 1 MiB (10 MiB for webhooks).
 - **CORS** allows only `WEB_PUBLIC_URL`, with credentials.
@@ -70,7 +71,13 @@ POST /intents/{id}/build           { address, relayerAllowed }  →  { xdr, vali
 POST /tx/submit                    { xdr, address? }            →  { hash }
 ```
 
-Only the GitHub user who typed `/bounty` may build through the link (`403 not_requester`). `/tx/submit` accepts **only** a signed, single-operation call to this contract's user functions; an unsigned envelope, another contract, a fee bump, a muxed source, or an admin function such as `upgrade` is refused before it reaches the network. After submission the indexer sees the `funded` event, creates the bounty, and the card appears on the issue.
+Only the GitHub user who typed `/bounty` may build through the link (`403 not_requester`). `/tx/submit` accepts **only** a signed, single-operation call to this contract's user functions; an unsigned envelope, another contract, a fee bump, a muxed source, or an admin function such as `upgrade` is refused before it reaches the network. If the contract itself rejects the call, the response is `422` with a stable code and the variant name in a separate field, so clients can branch without parsing text:
+
+```json
+{ "error": { "code": "contract_error", "contractError": "IssueAlreadyFunded", "message": "This issue already has a bounty." } }
+```
+
+`contractError` is one of the variants in `crates/escrow-core/src/contract_errors.rs`; `message` is safe to show to people. Other refusals keep `code: "submit_rejected"`. After submission the indexer sees the `funded` event, creates the bounty, and the card appears on the issue.
 
 ## Releasing and refunding as the maintainer
 
@@ -99,7 +106,7 @@ GET  /admin/status
 
 ## GitHub webhooks
 
-`POST /github/webhooks` with `X-Hub-Signature-256`, `X-GitHub-Delivery`, `X-GitHub-Event`. The signature is checked over the raw body before anything is parsed. A new delivery is recorded and queued (`202 { "queued": true }`); a redelivery is acknowledged without being processed again (`200 { "duplicate": true }`). Handled events: `installation`, `installation_repositories`, `issue_comment` (commands), `pull_request` (linking, review scheduling, merge → payout), `issues` (title and criteria edits). Others are acknowledged and ignored.
+`POST /github/webhooks` with `X-Hub-Signature-256`, `X-GitHub-Delivery`, `X-GitHub-Event`. The signature is checked over the raw body before anything is parsed. A new delivery is recorded and queued (`202 { "queued": true }`); a redelivery is acknowledged without being processed again (`200 { "duplicate": true }`). Handled events: `installation`, `installation_repositories`, `repository` (`renamed` and `transferred` update the stored name and every bounty's `issueUrl`), `issue_comment` (commands), `pull_request` (linking, review scheduling, merge → payout), `issues` (title and criteria edits). Others are acknowledged and ignored.
 
 ## Operations
 

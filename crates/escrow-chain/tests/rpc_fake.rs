@@ -397,6 +397,51 @@ async fn an_unreachable_rpc_is_a_transient_error_that_does_not_leak_the_url() {
     assert!(!e.to_string().contains("secret-api-key"));
 }
 
+#[tokio::test]
+async fn read_methods_retry_transient_failures_and_succeed() {
+    let attempts = Arc::new(Mutex::new(0usize));
+    let attempts2 = attempts.clone();
+    let fake = Fake::start(move |method, _| {
+        assert_eq!(method, "getEvents");
+        let mut n = attempts2.lock().unwrap();
+        *n += 1;
+        if *n < 3 {
+            json!({ "__error": { "code": -32603, "message": "transient failure" } })
+        } else {
+            json!({ "events": [], "cursor": "1-0", "latestLedger": 42 })
+        }
+    })
+    .await;
+    let page = fake.chain().events_from_ledger(10, 100).await.unwrap();
+    assert_eq!(page.latest_ledger, 42);
+    assert_eq!(fake.calls("getEvents").len(), 3);
+}
+
+#[tokio::test]
+async fn read_methods_stop_retrying_after_bounded_attempts() {
+    let fake = Fake::start(|_, _| json!({ "__error": { "code": -32603, "message": "still down" } })).await;
+    let err = fake.chain().latest_ledger().await.unwrap_err();
+    assert!(err.is_transient());
+    assert_eq!(fake.calls("getLatestLedger").len(), 3);
+}
+
+#[tokio::test]
+async fn send_transaction_is_never_retried_automatically() {
+    let (secret, r) = signer(9);
+    let (_, w) = signer(2);
+    let acct = account_entry(&r.address(), 1, 1);
+    let fake = Fake::start(move |method, _| match method {
+        "getLedgerEntries" => acct.clone(),
+        "simulateTransaction" => sim_ok(None),
+        "sendTransaction" => json!({ "__error": { "code": -32603, "message": "temporary" } }),
+        other => panic!("unexpected {other}"),
+    })
+    .await;
+    let err = Relayer::new(fake.chain(), &secret).unwrap().submit_release(1, &w.address()).await.unwrap_err();
+    assert!(err.is_transient());
+    assert_eq!(fake.calls("sendTransaction").len(), 1);
+}
+
 #[test]
 fn base64_helper_is_standard() {
     assert_eq!(STANDARD.encode([0u8, 1, 2]), "AAEC");

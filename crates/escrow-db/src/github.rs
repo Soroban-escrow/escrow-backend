@@ -51,6 +51,16 @@ pub async fn get_installation<'e>(ex: impl PgExecutor<'e>, id: i64) -> Result<Op
         .await
 }
 
+/// Finishes a statement whose `up` CTE returns the repo's `id, full_name`: rewrites every bounty of that repo
+/// whose `issue_url` is not `https://github.com/{full_name}/issues/{n}` (the form the indexer stores), so a
+/// rename or transfer is reflected everywhere `issue_url` is read. Unchanged URLs are not touched.
+const REWRITE_ISSUE_URLS: &str = "
+    UPDATE bounties b SET issue_url = 'https://github.com/' || up.full_name || '/issues/' || b.issue_number
+    FROM up
+    WHERE b.repo_id = up.id AND b.issue_url IS DISTINCT FROM 'https://github.com/' || up.full_name || '/issues/' || b.issue_number";
+
+/// Inserts or updates a repository. When the name changed (a rename or transfer seen through any event,
+/// or `sync-installations`), the stored issue URLs of its bounties are rewritten in the same statement.
 pub async fn upsert_repo<'e>(
     ex: impl PgExecutor<'e>,
     id: i64,
@@ -58,11 +68,13 @@ pub async fn upsert_repo<'e>(
     full_name: &str,
     is_private: bool,
 ) -> Result<(), sqlx::Error> {
-    sqlx::query(
-        "INSERT INTO repos (id, installation_id, full_name, is_private) VALUES ($1,$2,$3,$4)
-         ON CONFLICT (id) DO UPDATE SET installation_id = EXCLUDED.installation_id, full_name = EXCLUDED.full_name,
-           is_private = EXCLUDED.is_private, suspended_at = NULL",
-    )
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "WITH up AS (
+            INSERT INTO repos (id, installation_id, full_name, is_private) VALUES ($1,$2,$3,$4)
+            ON CONFLICT (id) DO UPDATE SET installation_id = EXCLUDED.installation_id, full_name = EXCLUDED.full_name, is_private = EXCLUDED.is_private
+            RETURNING id, full_name
+         ) {REWRITE_ISSUE_URLS}"
+    )))
     .bind(id)
     .bind(installation_id)
     .bind(full_name)
@@ -72,12 +84,28 @@ pub async fn upsert_repo<'e>(
     .map(|_| ())
 }
 
-pub async fn suspend_repo<'e>(ex: impl PgExecutor<'e>, id: i64) -> Result<(), sqlx::Error> {
-    sqlx::query("UPDATE repos SET suspended_at = NOW() WHERE id = $1").bind(id).execute(ex).await.map(|_| ())
+/// Renames a known repository (nothing happens for an unknown id) and rewrites its bounties' issue URLs.
+/// Returns how many bounties got a new URL.
+pub async fn rename_repo<'e>(ex: impl PgExecutor<'e>, id: i64, full_name: &str) -> Result<u64, sqlx::Error> {
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "WITH up AS (UPDATE repos SET full_name = $2 WHERE id = $1 RETURNING id, full_name) {REWRITE_ISSUE_URLS}"
+    )))
+    .bind(id)
+    .bind(full_name)
+    .execute(ex)
+    .await
+    .map(|r| r.rows_affected())
 }
 
-pub async fn unsuspend_repo<'e>(ex: impl PgExecutor<'e>, id: i64) -> Result<(), sqlx::Error> {
-    sqlx::query("UPDATE repos SET suspended_at = NULL WHERE id = $1").bind(id).execute(ex).await.map(|_| ())
+/// Marks a repository as deleted/removed from the installation (soft delete to preserve bounty references).
+pub async fn suspend_repo<'e>(ex: impl PgExecutor<'e>, id: i64) -> Result<(), sqlx::Error> {
+    // Soft delete: we could add a 'suspended_at' column, but for now just removing from active repos
+    // is enough to prevent new bounties. Existing bounties remain intact.
+    sqlx::query("UPDATE repos SET installation_id = -1 WHERE id = $1")
+        .bind(id)
+        .execute(ex)
+        .await
+        .map(|_| ())
 }
 
 pub async fn get_repo<'e>(ex: impl PgExecutor<'e>, id: i64) -> Result<Option<Repo>, sqlx::Error> {

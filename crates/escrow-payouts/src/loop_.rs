@@ -81,12 +81,47 @@ pub async fn relayer_pass(
 }
 
 pub async fn run_relayer(d: PayoutDeps, signer: &dyn ReleaseSigner, stop: CancellationToken, interval: Duration) {
+    // #110: only one relayer loop may run at a time. A second instance must stand by so two
+    // workers do not read the same account sequence and submit colliding releases. The lock is
+    // tied to a dedicated connection; a crashed leader releases it automatically when the
+    // backend connection dies, and the standby picks it up on its next retry.
     let mut retry_at = RetryTable::new();
+    let mut announced_standby = false;
     while !stop.is_cancelled() {
-        if let Err(e) = relayer_pass(&d, signer, &mut retry_at, Instant::now()).await {
-            tracing::error!(error = %e, "relayer pass failed");
+        let mut leader = match escrow_db::leader::try_acquire(&d.db.pool, escrow_db::leader::RELAYER_LOCK_ID).await {
+            Ok(Some(l)) => {
+                tracing::info!("relayer: acquired leader lock");
+                announced_standby = false;
+                l
+            }
+            Ok(None) => {
+                if !announced_standby {
+                    // Log standby once per acquisition attempt sequence to avoid every
+                    // `interval` flooding a quiet log; a successful acquire resets the flag.
+                    tracing::info!(interval_secs = interval.as_secs(), "relayer: standing by - another instance holds the leader lock");
+                    announced_standby = true;
+                }
+                tokio::select! { _ = stop.cancelled() => break, _ = tokio::time::sleep(interval) => continue }
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "relayer: could not query the leader lock; retrying after the poll interval");
+                tokio::select! { _ = stop.cancelled() => break, _ = tokio::time::sleep(interval) => continue }
+            }
+        };
+
+        while !stop.is_cancelled() {
+            if let Err(e) = relayer_pass(&d, signer, &mut retry_at, Instant::now()).await {
+                tracing::error!(error = %e, "relayer pass failed");
+            }
+            // A dead leader connection (network blip, Postgres restart) means another worker
+            // may already have the lock; drop out of the inner loop and recompete.
+            if let Err(e) = leader.ping().await {
+                tracing::warn!(error = %e, "relayer: leader connection lost, will try to reacquire");
+                break;
+            }
+            tokio::select! { _ = stop.cancelled() => return, _ = tokio::time::sleep(interval) => {} }
         }
-        tokio::select! { _ = stop.cancelled() => break, _ = tokio::time::sleep(interval) => {} }
+        drop(leader); // returns the connection to the pool - releases the advisory lock
     }
 }
 

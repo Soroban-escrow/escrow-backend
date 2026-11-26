@@ -37,6 +37,7 @@ services:
       DATABASE_URL: postgres://escrow:${POSTGRES_PASSWORD}@db:5432/escrow
       PORT: "3001"
       TRUST_PROXY: "1"        # Caddy sits in front and sets X-Forwarded-For
+      TRUST_PROXY_HOPS: "1"   # Number of trusted proxy hops from the right of X-Forwarded-For
     depends_on:
       db:
         condition: service_healthy

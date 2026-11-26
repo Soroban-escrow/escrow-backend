@@ -190,4 +190,31 @@ mod tests {
         assert!(f.bool("flag").unwrap_err().to_string().contains("field `flag`"));
         assert!(Fields::of(&u64v(1)).is_err());
     }
+
+    #[test]
+    fn arbitrary_scval_variants_never_panic() {
+        let bad_sym = ScSymbol(vec![0xff, 0xfe].try_into().unwrap());
+        let cases = [
+            ScVal::Void,
+            ScVal::Bool(false),
+            ScVal::U32(0),
+            ScVal::U64(0),
+            ScVal::I128(Int128Parts { hi: i64::MIN, lo: u64::MAX }),
+            ScVal::Vec(None),
+            ScVal::Vec(Some(ScVec(vec![].try_into().unwrap()))),
+            ScVal::Map(None),
+            ScVal::Symbol(bad_sym),
+        ];
+        for v in &cases {
+            let _ = read_u64(v);
+            let _ = read_u32(v);
+            let _ = read_bool(v);
+            let _ = read_i128(v);
+            let _ = read_address(v);
+            let _ = read_opt_address(v);
+            let _ = read_symbol(v);
+            let _ = read_enum_variant(v);
+            let _ = Fields::of(v);
+        }
+    }
 }

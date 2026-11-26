@@ -11,7 +11,7 @@ info:
     **Conventions**
     - JSON everywhere. 64-bit ids (`id`, `repoId`, `githubId`, ...) are **strings**; amounts are **strings** of base units
       (7 decimals: `"50000000"` = 5 tokens).
-    - Errors are always `{ "error": { "code": "...", "message": "..." } }`. `code` is stable; `message` is for people.
+    - Every response carries `x-request-id` (a well-formed caller value or a generated UUID), also included in error bodies and tracing spans. Errors are `{ "error": { "code": "...", "message": "...", "request_id": "..." } }`.
     - Sessions are an `HttpOnly` cookie (`se_session`). Every state-changing request also needs the CSRF token from
       `GET /auth/me` in the `X-CSRF-Token` header.
     - Cursor pagination: pass the previous page's `nextCursor`.
@@ -301,7 +301,20 @@ paths:
       responses:
         '200': { description: Submitted, content: { application/json: { schema: { type: object, properties: { hash: { type: string } } } } } }
         '400': { $ref: '#/components/responses/Error' }
-        '422': { $ref: '#/components/responses/Error' }
+        '422':
+          description: Refused. `error.code` is `submit_rejected` for a transaction that is not allowed, or `contract_error` when the escrow contract rejected the call; then `error.contractError` names the variant (for example `IssueAlreadyFunded`) and `error.message` is a friendly explanation.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: object
+                    required: [code, message]
+                    properties:
+                      code: { type: string, enum: [submit_rejected, contract_error] }
+                      message: { type: string }
+                      contractError: { type: string, description: 'Contract error variant; present only when code is contract_error', example: IssueAlreadyFunded }
         '503': { $ref: '#/components/responses/Error' }
   /bounties/{id}/release/build:
     post:
@@ -454,6 +467,47 @@ paths:
                   aiReviews: { type: boolean }
         '403': { $ref: '#/components/responses/Error' }
         '404': { $ref: '#/components/responses/Error' }
+  /admin/audit:
+    get:
+      tags: [Admin]
+      summary: Browse the audit log (keyset-paginated, newest first)
+      description: |
+        Returns audit-log rows ordered by `(createdAt, id)` descending. Combine
+        `actor`, `action` and `targetPrefix` to scope an investigation; the
+        existing `audit_log_lookup (action, target)` index covers the common
+        filter-by-action browse. Use `cursor` with the previous page's
+        `nextCursor` to walk the log without snapshotting.
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - { name: actor, in: query, schema: { type: string, maxLength: 200 } }
+        - { name: action, in: query, schema: { type: string, maxLength: 100 } }
+        - { name: targetPrefix, in: query, description: Match any `target` starting with this string, schema: { type: string, maxLength: 200 } }
+        - { name: cursor, in: query, schema: { type: string, pattern: '^[a-z0-9]{10,40}$' } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 50 } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, nextCursor]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      required: [id, actor, action, target, data, createdAt]
+                      properties:
+                        id: { type: string }
+                        actor: { type: string }
+                        action: { type: string }
+                        target: { type: string }
+                        data: { type: object }
+                        createdAt: { type: string, format: date-time }
+                  nextCursor: { type: [string, 'null'] }
+        '400': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
   /admin/status:
     get:
       tags: [Admin]
@@ -515,7 +569,7 @@ components:
       properties:
         error:
           type: object
-          required: [code, message]
+          required: [code, message, request_id]
           properties:
             code:
               type: string
@@ -524,6 +578,7 @@ components:
                 `chain_unavailable`, `state_archived`, and `contract_<Name>` for any error the escrow contract itself
                 returns (e.g. `contract_IssueAlreadyFunded`, `contract_DeadlineNotReached`).
             message: { type: string }
+            request_id: { type: string, description: The `x-request-id` for this request; quote it in support requests }
     Ok: { type: object, properties: { ok: { type: boolean } } }
     Xdr:
       type: object

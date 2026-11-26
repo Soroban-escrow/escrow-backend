@@ -22,6 +22,17 @@ pub async fn mark_processed<'e>(ex: impl PgExecutor<'e>, id: &str, error: Option
         .map(|_| ())
 }
 
+/// Clears a terminal failure so GitHub's "Redeliver" can be processed again. `true` means this row was
+/// failed and is now ready; the conditional update makes concurrent redeliveries safe: only one wins.
+/// Successful and still-queued deliveries have no error and are left untouched.
+pub async fn retry_failed_delivery<'e>(ex: impl PgExecutor<'e>, id: &str) -> Result<bool, sqlx::Error> {
+    sqlx::query("UPDATE webhook_deliveries SET processed_at = NULL, error = NULL WHERE id = $1 AND error IS NOT NULL")
+        .bind(id)
+        .execute(ex)
+        .await
+        .map(|r| r.rows_affected() == 1)
+}
+
 pub async fn get_cursor<'e>(ex: impl PgExecutor<'e>, id: &str) -> Result<Option<IndexerCursor>, sqlx::Error> {
     sqlx::query_as("SELECT id, cursor, ledger, updated_at FROM indexer_cursors WHERE id = $1").bind(id).fetch_optional(ex).await
 }

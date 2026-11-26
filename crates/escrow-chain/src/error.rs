@@ -39,6 +39,23 @@ impl ChainError {
             Self::Http(_) | Self::Timeout(_) | Self::Busy => true,
             // JSON-RPC: -32603 internal error and -32000..-32099 server errors may pass; -32602 invalid params will not
             Self::Rpc { code, .. } => *code == -32603 || (-32099..=-32000).contains(code) || *code == 429,
+            Self::Rejected(m) => is_retryable_tx_result(m),
+            _ => false,
+        }
+    }
+
+    /// `true` for a rejection the relayer should never retry: a contract rejection, or a
+    /// transaction result that cannot be fixed by resubmitting (insufficient balance, malformed,
+    /// bad auth). Bad sequence and insufficient fee are retryable and return `false`.
+    ///
+    /// Non-`Rejected` variants return `false`; callers combine this with `is_transient` for
+    /// network-level classification.
+    pub fn is_permanent_rejection(&self) -> bool {
+        if self.contract_error().is_some() {
+            return true;
+        }
+        match self {
+            Self::Rejected(m) => !is_retryable_tx_result(m),
             _ => false,
         }
     }
@@ -51,6 +68,19 @@ impl ChainError {
         };
         ["ledger range", "retention", "startledger", "cursor"].iter().any(|k| m.contains(k))
     }
+}
+
+/// `TransactionResult.result` names (from `describe_tx_error`) that a fresh submit may clear.
+/// Bad sequence resolves when the account's seqnum is re-read; insufficient fee can be bumped on
+/// the next attempt. Anything else (insufficient balance, malformed, bad auth, unknown) never will.
+fn is_retryable_tx_result(result_name: &str) -> bool {
+    matches!(
+        result_name,
+        "TxBadSeq"
+            // Separate "late sequence" code in some xdr variants; same remediation.
+            | "TxLateSequence"
+            | "TxInsufficientFee"
+    )
 }
 
 impl From<reqwest::Error> for ChainError {
@@ -91,9 +121,38 @@ mod tests {
     fn classifies_transient_failures() {
         assert!(ChainError::Http("timeout".into()).is_transient());
         assert!(ChainError::Timeout("abc".into()).is_transient());
+        assert!(ChainError::Busy.is_transient());
         assert!(ChainError::Rpc { code: -32603, message: "internal".into() }.is_transient());
         assert!(!ChainError::Rpc { code: -32602, message: "invalid params".into() }.is_transient());
+        // #109: a human string with spaces never matches a TxResult variant name
         assert!(!ChainError::Rejected("bad seq".into()).is_transient());
+    }
+
+    #[test]
+    fn rejected_tx_results_classify_by_remediation() {
+        // Retryable: re-reading the sequence or bumping the fee next attempt can clear them.
+        for name in ["TxBadSeq", "TxLateSequence", "TxInsufficientFee"] {
+            let e = ChainError::Rejected(name.into());
+            assert!(e.is_transient(), "{name} should be transient");
+            assert!(!e.is_permanent_rejection(), "{name} should not be permanent");
+        }
+        // Permanent: nothing we can do.
+        for name in ["TxInsufficientBalance", "TxMalformed", "TxBadAuth", "TxBadAuthExtra", "TxNoAccount", "rejected"] {
+            let e = ChainError::Rejected(name.into());
+            assert!(!e.is_transient(), "{name} should not be transient");
+            assert!(e.is_permanent_rejection(), "{name} should be permanent");
+        }
+    }
+
+    #[test]
+    fn contract_rejections_are_always_permanent() {
+        // Even though this is a Simulation, contract_error returns Some and is_permanent_rejection
+        // is the single predicate the relayer uses to decide "do not retry".
+        let e = ChainError::Simulation("HostError: Error(Contract, #4)".into());
+        assert!(e.is_permanent_rejection());
+        // Transport failures never claim to be a permanent rejection on their own.
+        assert!(!ChainError::Http("boom".into()).is_permanent_rejection());
+        assert!(!ChainError::Busy.is_permanent_rejection());
     }
 
     #[test]

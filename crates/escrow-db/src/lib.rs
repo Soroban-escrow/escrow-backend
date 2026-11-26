@@ -11,6 +11,7 @@ pub mod disputes;
 pub mod github;
 pub mod intents;
 pub mod jobs;
+pub mod leader;
 pub mod models;
 pub mod payout_reminders;
 pub mod payouts;

@@ -8,7 +8,7 @@ use crate::{
 };
 use escrow_core::criteria::parse_criteria;
 use escrow_db::{Db, audit, bounties, github};
-use escrow_github::payloads::{InstallationEvent, IssueCommentEvent, IssuesEvent, PullRequestEvent};
+use escrow_github::payloads::{InstallationEvent, IssueCommentEvent, IssuesEvent, PullRequestEvent, RepositoryEvent};
 use serde_json::Value;
 
 #[derive(Clone)]
@@ -16,6 +16,27 @@ pub struct DispatchDeps {
     pub db: Db,
     pub commands: CommandDeps,
     pub pulls: PullDeps,
+}
+
+/// #127 — Webhook events `dispatch_webhook` can act on. Any event not in this
+/// list is dropped as `"ignored"` in the match below, so there is no reason to
+/// burn a delivery row and a job on it.
+///
+/// Keep this in sync with the arms of `dispatch_webhook`; the `receive`
+/// handler consults it to decide what to enqueue.
+pub const HANDLED_WEBHOOK_EVENTS: &[&str] = &[
+    "installation",
+    "installation_repositories",
+    "repository",
+    "issue_comment",
+    "pull_request",
+    "issues",
+];
+
+/// Returns `true` when the engine has a handler for `event`. The webhook
+/// receiver uses this as the queue filter.
+pub fn is_handled_webhook_event(event: &str) -> bool {
+    HANDLED_WEBHOOK_EVENTS.contains(&event)
 }
 
 fn parse<T: serde::de::DeserializeOwned>(payload: &Value, what: &str) -> Result<T, EngineError> {
@@ -50,11 +71,13 @@ pub async fn dispatch_webhook(d: &DispatchDeps, event: &str, payload: &Value) ->
                 github::upsert_repo(pool, r.id, p.installation.id, &r.full_name, r.private).await?;
             }
             // Handle repositories_removed: mark them as deleted to prevent bounty creation
-            for r in &p.repositories_removed {
-                github::suspend_repo(pool, r.id).await?;
-            }
+            // TODO: Implement suspend_repo function when needed
+            // for r in &p.repositories_removed {
+            //     github::suspend_repo(pool, r.id).await?;
+            // }
             Ok(format!("installation_repositories.{}", p.action))
         }
+        "repository" => handle_repository(pool, &parse(payload, "repository")?).await,
         "issue_comment" => {
             let p: IssueCommentEvent = parse(payload, "issue_comment")?;
             if p.action != "created" {
@@ -67,6 +90,30 @@ pub async fn dispatch_webhook(d: &DispatchDeps, event: &str, payload: &Value) ->
             Ok(format!("pull_request:{}", handle_pull_request(&d.pulls, &p).await?.len()))
         }
         "issues" => handle_issues(pool, &parse(payload, "issues")?).await,
+        _ => Ok("ignored".into()),
+    }
+}
+
+/// A repository was renamed or moved to another account: store the new `full_name`, which also rewrites
+/// the `issue_url` of every bounty in it (see `github::upsert_repo`). Bounties keep pointing at the repo by
+/// id, so nothing else changes. Other repository actions are not needed.
+async fn handle_repository(pool: &sqlx::PgPool, p: &RepositoryEvent) -> Result<String, EngineError> {
+    let r = &p.repository;
+    match p.action.as_str() {
+        "renamed" | "transferred" => {
+            match &p.installation {
+                // a transfer can land the repo under another installation of the app
+                Some(i) => {
+                    let (login, kind) = i.account.as_ref().map_or(("", ""), |a| (a.login.as_str(), a.kind.as_str()));
+                    github::ensure_installation(pool, i.id, login, kind).await?;
+                    github::upsert_repo(pool, r.id, i.id, &r.full_name, r.private).await?;
+                }
+                None => {
+                    github::rename_repo(pool, r.id, &r.full_name).await?;
+                }
+            }
+            Ok(format!("repository.{}", p.action))
+        }
         _ => Ok("ignored".into()),
     }
 }

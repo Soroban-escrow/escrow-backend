@@ -2,6 +2,7 @@
 //! (needs DATABASE_URL pointing at a server where the role may CREATE DATABASE).
 
 use chrono::{Duration, Utc};
+use escrow_core::PayoutStatus;
 use escrow_db::{Db, MIGRATOR, audit, bounties, disputes, github, intents, jobs, payouts, prs, reviews, sessions, users, webhooks};
 use sqlx::PgPool;
 
@@ -287,14 +288,14 @@ async fn payout_transitions_are_guarded(pool: PgPool) {
     let mut tasks = vec![];
     for _ in 0..8 {
         let (pool, id) = (pool.clone(), p.id.clone());
-        tasks.push(tokio::spawn(async move { payouts::release_from_pending(&pool, &id, "QUEUED", "GWIN").await.unwrap() }));
+        tasks.push(tokio::spawn(async move { payouts::release_from_pending(&pool, &id, PayoutStatus::Queued, "GWIN").await.unwrap() }));
     }
     let mut wins = 0;
     for t in tasks {
         wins += usize::from(t.await.unwrap());
     }
     assert_eq!(wins, 1, "exactly one caller moves it out of PENDING_WALLET");
-    assert!(!payouts::release_from_pending(&pool, &p.id, "AWAITING_MAINTAINER", "GOTHER").await.unwrap());
+    assert!(!payouts::release_from_pending(&pool, &p.id, PayoutStatus::AwaitingMaintainer, "GOTHER").await.unwrap());
 
     payouts::mark_submitted(&pool, &p.id, "hash1").await.unwrap();
     let s = payouts::get(&pool, &p.id).await.unwrap().unwrap();
@@ -405,6 +406,57 @@ async fn duplicate_diffs_and_review_ranking_inputs(pool: PgPool) {
 }
 
 #[sqlx::test(migrator = "MIGRATOR")]
+async fn a_bounty_has_at_most_one_open_dispute(pool: PgPool) {
+    seed_repo(&pool).await;
+    bounty(&pool, 4, 3, 100, 14).await;
+    bounty(&pool, 5, 4, 100, 14).await;
+
+    let first = match disputes::create_if_none_open(&pool, 4, 500, "one").await.unwrap() {
+        disputes::NewDispute::Created(d) => d,
+        other => panic!("expected a new dispute, got {other:?}"),
+    };
+    match disputes::create_if_none_open(&pool, 4, 900, "two").await.unwrap() {
+        disputes::NewDispute::AlreadyOpen(d) => assert_eq!((d.id.as_str(), d.reason.as_str()), (first.id.as_str(), "one")),
+        other => panic!("expected the existing dispute, got {other:?}"),
+    }
+    assert_eq!(disputes::open_for_bounty(&pool, 4).await.unwrap().unwrap().id, first.id);
+    assert_eq!(disputes::count_open(&pool).await.unwrap(), 1);
+
+    // the database itself refuses a second open row, not only this function
+    assert!(disputes::create(&pool, 4, 900, "sneaky").await.is_err());
+
+    // other bounties are unaffected
+    assert!(matches!(disputes::create_if_none_open(&pool, 5, 500, "other").await.unwrap(), disputes::NewDispute::Created(_)));
+    assert_eq!(disputes::count_open(&pool).await.unwrap(), 2);
+
+    // an opened-on-chain dispute still counts as open; a resolved one does not
+    disputes::mark_opened_onchain(&pool, 4).await.unwrap();
+    assert!(matches!(disputes::create_if_none_open(&pool, 4, 500, "again").await.unwrap(), disputes::NewDispute::AlreadyOpen(_)));
+    disputes::mark_resolved(&pool, 4).await.unwrap();
+    assert!(disputes::open_for_bounty(&pool, 4).await.unwrap().is_none());
+    assert!(matches!(disputes::create_if_none_open(&pool, 4, 500, "new round").await.unwrap(), disputes::NewDispute::Created(_)));
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn concurrent_dispute_requests_create_exactly_one_row(pool: PgPool) {
+    seed_repo(&pool).await;
+    bounty(&pool, 4, 3, 100, 14).await;
+    let tasks: Vec<_> = (0..8)
+        .map(|i| {
+            let pool = pool.clone();
+            tokio::spawn(async move { disputes::create_if_none_open(&pool, 4, 500 + i, "race").await.unwrap() })
+        })
+        .collect();
+    let mut created = 0;
+    for t in tasks {
+        if matches!(t.await.unwrap(), disputes::NewDispute::Created(_)) {
+            created += 1;
+        }
+    }
+    assert_eq!((created, disputes::count_open(&pool).await.unwrap()), (1, 1));
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
 async fn dispute_lifecycle_follows_chain_events(pool: PgPool) {
     seed_repo(&pool).await;
     bounty(&pool, 4, 3, 100, 14).await;
@@ -423,6 +475,12 @@ async fn webhook_redelivery_and_cursor_and_audit(pool: PgPool) {
     assert!(webhooks::insert_delivery(&pool, "d1", "issue_comment").await.unwrap());
     assert!(!webhooks::insert_delivery(&pool, "d1", "issue_comment").await.unwrap(), "GitHub redelivery is recognised");
     webhooks::mark_processed(&pool, "d1", Some("boom")).await.unwrap();
+    assert!(webhooks::retry_failed_delivery(&pool, "d1").await.unwrap(), "a failed delivery may be retried");
+    assert!(!webhooks::retry_failed_delivery(&pool, "d1").await.unwrap(), "the failure has been cleared");
+    webhooks::mark_processed(&pool, "d1", None).await.unwrap();
+    assert!(!webhooks::retry_failed_delivery(&pool, "d1").await.unwrap(), "a success stays a duplicate");
+    webhooks::insert_delivery(&pool, "d2", "ping").await.unwrap();
+    assert!(!webhooks::retry_failed_delivery(&pool, "d2").await.unwrap(), "a still-queued delivery stays a duplicate");
 
     assert!(webhooks::get_cursor(&pool, "bounty_escrow").await.unwrap().is_none());
     webhooks::save_cursor(&pool, "bounty_escrow", "c1", 10).await.unwrap();

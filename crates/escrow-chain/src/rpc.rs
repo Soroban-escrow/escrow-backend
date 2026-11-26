@@ -7,6 +7,16 @@ use serde_json::{Value, json};
 use std::time::Duration;
 use stellar_xdr::{Limits, ReadXdr, ScVal, SorobanAuthorizationEntry, SorobanTransactionData};
 
+#[derive(Debug, Clone, Copy)]
+pub struct RetryPolicy {
+    pub max_retries: usize,
+    pub initial_delay: Duration,
+}
+
+impl RetryPolicy {
+    pub const DEFAULT_READ: Self = Self { max_retries: 2, initial_delay: Duration::from_millis(100) };
+}
+
 #[derive(Clone)]
 pub struct RpcClient {
     http: reqwest::Client,
@@ -31,7 +41,24 @@ impl RpcClient {
         Ok(Self { http, url: url.to_string() })
     }
 
-    pub async fn call<T: DeserializeOwned>(&self, method: &str, params: Value) -> Result<T, ChainError> {
+    pub async fn call<T: DeserializeOwned>(&self, method: &str, params: Value, retry: Option<RetryPolicy>) -> Result<T, ChainError> {
+        let max_retries = retry.map_or(0, |p| p.max_retries);
+        let mut delay = retry.map_or(Duration::ZERO, |p| p.initial_delay);
+        let mut attempt = 0usize;
+        loop {
+            match self.call_once(method, &params).await {
+                Ok(v) => return Ok(v),
+                Err(e) if e.is_transient() && attempt < max_retries => {
+                    attempt += 1;
+                    tokio::time::sleep(delay).await;
+                    delay *= 2;
+                }
+                Err(e) => return Err(e),
+            }
+        }
+    }
+
+    async fn call_once<T: DeserializeOwned>(&self, method: &str, params: &Value) -> Result<T, ChainError> {
         let body = json!({ "jsonrpc": "2.0", "id": 1, "method": method, "params": params });
         let resp = self.http.post(&self.url).json(&body).send().await?;
         let status = resp.status();
