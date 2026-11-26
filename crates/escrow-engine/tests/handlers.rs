@@ -147,7 +147,8 @@ async fn help_and_usage_errors_reply_with_the_command_list(pool: PgPool) {
     assert_eq!(run(&w, "issue_comment", &say("/bounty help", "stranger")).await.unwrap(), "help");
     assert_eq!(run(&w, "issue_comment", &say("/bounty fifty", "stranger")).await.unwrap(), "error");
     let b = w.gh.bodies();
-    assert!(b[0].contains("SkillEscrow commands") && b[1].contains("Invalid amount \"fifty\"") && b[1].contains("SkillEscrow commands"));
+    assert!(b[0].contains("SkillEscrow commands") && b[0].contains("/bounty review"), "help lists all commands including review");
+    assert!(b[1].contains("Invalid amount \"fifty\"") && b[1].contains("SkillEscrow commands"));
 }
 
 #[sqlx::test(migrator = "MIGRATOR")]
